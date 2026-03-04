@@ -18,7 +18,7 @@
 vref:
   target_V: 1.200          # Target reference voltage [V]
   tolerance_V: 0.010       # Allowed deviation from target (±10 mV)
-  measurement_node: "VE1"  # ngspice node name where Vref is measured
+  measurement_node: "VOUT"  # ngspice node name where Vref is measured
 
 # ---------------------------------------------------------------------------
 # Temperature Coefficient

@@ -66,6 +66,9 @@ class OptimizationResult:
     n_simulations: int
     n_spec_pass: int
     history: list[dict[str, Any]]
+    # Top spec-passing candidate designs, sorted by closeness to Vref target.
+    # Each entry has the same keys as a history entry.
+    top_candidates: list[dict[str, Any]] = field(default_factory=list)
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def spec_pass_rate(self) -> float:
@@ -74,6 +77,21 @@ class OptimizationResult:
             return 0.0
         return self.n_spec_pass / self.n_simulations
 
+    def top_k_candidates(self, k: int = 3) -> list[dict[str, Any]]:
+        """Return up to *k* spec-passing candidates sorted by closeness to Vref target.
+
+        Parameters
+        ----------
+        k:
+            Maximum number of candidates to return.
+
+        Returns
+        -------
+        list of dict
+            Each dict has at least ``params``, ``vref_V``, and ``spec_vref_pass`` keys.
+        """
+        return self.top_candidates[:k]
+
     def to_dict(self) -> dict:
         return {
             "best_params": self.best_params,
@@ -81,6 +99,7 @@ class OptimizationResult:
             "n_simulations": self.n_simulations,
             "n_spec_pass": self.n_spec_pass,
             "spec_pass_rate": self.spec_pass_rate(),
+            "top_candidates": self.top_candidates,
             "history": self.history,
             "timestamp": self.timestamp,
         }
@@ -208,6 +227,7 @@ class BayesianOptimizer:
         n_pass = 0
         best_error = np.inf
         best_params: dict[str, Any] = {}
+        passing_entries: list[dict[str, Any]] = []  # spec-passing entries for top_candidates
 
         # Phase 1: LHS initialization
         logger.info("=== BO Phase 1: LHS initialization (%d points) ===", self.n_init)
@@ -226,6 +246,7 @@ class BayesianOptimizer:
                 y_obs.append(err)
                 if entry.get("spec_vref_pass"):
                     n_pass += 1
+                    passing_entries.append(entry)
                 if err < best_error:
                     best_error = err
                     best_params = params
@@ -272,6 +293,7 @@ class BayesianOptimizer:
                 y_obs.append(err)
                 if entry.get("spec_vref_pass"):
                     n_pass += 1
+                    passing_entries.append(entry)
                 if err < best_error:
                     best_error = err
                     best_params = candidate_params
@@ -288,12 +310,23 @@ class BayesianOptimizer:
             if last_best:
                 best_vref = last_best.get("vref_V")
 
+        # Build top_candidates: spec-passing designs sorted by closeness to target.
+        # Deduplicate by rounding Vref to 1 mV to avoid near-identical entries.
+        seen_vrefs: set[int] = set()
+        top_candidates: list[dict[str, Any]] = []
+        for e in sorted(passing_entries, key=lambda x: abs(x["vref_V"] - self._vref_target)):
+            v_rounded = round(e["vref_V"] * 1000)  # quantize to 1 mV
+            if v_rounded not in seen_vrefs:
+                seen_vrefs.add(v_rounded)
+                top_candidates.append(e)
+
         result = OptimizationResult(
             best_params=best_params,
             best_vref_V=best_vref,
             n_simulations=n_sim,
             n_spec_pass=n_pass,
             history=history,
+            top_candidates=top_candidates,
         )
 
         # Save result
@@ -348,7 +381,13 @@ class SyntheticBandgapRunner:
     Replaces ngspice when it is not installed, so that the full BO pipeline
     can be exercised without a real SPICE simulator.
 
-    Vref ≈ Vbe + (R1/R2) * VT * ln(N)
+    Corrected Brokaw formula (common-base topology)::
+
+        I_PTAT = VT · ln(N) / R1
+        Vref   = Vbe + 2 · (R2/R1) · VT · ln(N)
+
+    where R1 is the PTAT resistor between emitters and R2 is the
+    emitter-to-GND resistor (carries 2·I_PTAT).
 
     Notes
     -----
@@ -369,17 +408,23 @@ class SyntheticBandgapRunner:
         self._rng = np.random.default_rng(seed)
 
     def run(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Evaluate the analytic bandgap model at *params*."""
-        N = float(params.get("N", 8))
-        R1 = float(params.get("R1", 100e3))
-        R2 = float(params.get("R2", 10e3))
+        """Evaluate the analytic bandgap model at *params*.
 
-        VT = 0.02585  # Thermal voltage at 300 K
+        Default parameter values match the corrected netlist defaults:
+        R1=20 kΩ (PTAT resistor), R2=100 kΩ (emitter-to-GND resistor).
+        """
+        N = float(params.get("N", 8))
+        R1 = float(params.get("R1", 20e3))   # PTAT resistor between emitters
+        R2 = float(params.get("R2", 100e3))  # emitter-to-GND resistor
+
+        VT = 0.02585  # Thermal voltage at 300 K [V]
         Vbe = 0.650 + self._rng.normal(0, self.noise_std)
-        # Brokaw formula: Vref ≈ Vbe + (R1/R2) * VT * ln(N)
-        Vref = Vbe + (R1 / R2) * VT * np.log(max(N, 1.0))
+        # Corrected Brokaw formula: Vref ≈ Vbe + 2·(R2/R1)·VT·ln(N)
+        # Both emitter currents (IE1 + I_PTAT = 2·I) flow through R2.
+        Vref = Vbe + 2.0 * (R2 / R1) * VT * np.log(max(N, 1.0))
         Vref += self._rng.normal(0, self.noise_std)
-        iq_uA = Vref / R1 * 1e6
+        # Quiescent current: Iq = 2 · I_PTAT = 2 · VT · ln(N) / R1
+        iq_uA = 2.0 * VT * np.log(max(N, 1.0)) / R1 * 1e6
 
         target = self.specs["vref"]["target_V"]
         tol = self.specs["vref"]["tolerance_V"]
@@ -625,6 +670,7 @@ def main() -> None:
             "spec_pass_rate": round(bo_result.spec_pass_rate(), 4),
             "best_params": bo_result.best_params,
             "best_vref_V": bo_result.best_vref_V,
+            "top_candidates": bo_result.top_k_candidates(k=3),
         },
         "surrogate": surrogate_metrics,
         "comparison": {
@@ -663,6 +709,17 @@ def main() -> None:
     print(f"  Simulation savings: {simulation_reduction_pct:.0f}%")
     if bo_result.best_vref_V is not None:
         print(f"  Best Vref         : {bo_result.best_vref_V:.4f} V")
+    candidates = bo_result.top_k_candidates(k=3)
+    if candidates:
+        print(f"\n  Top {len(candidates)} candidate design(s) "
+              f"(spec-passing, sorted by |Vref − target|):")
+        for i, c in enumerate(candidates, 1):
+            p = c["params"]
+            print(f"    [{i}] Vref={c['vref_V']:.4f} V  "
+                  f"N={p.get('N')}  R1={p.get('R1'):.0f}  R2={p.get('R2'):.0f}  "
+                  f"W_P={p.get('W_P', float('nan')):.2e}  L_P={p.get('L_P', float('nan')):.2e}")
+    else:
+        print("  No spec-passing candidates found — try increasing budget.")
     print(f"  Output JSON       : {summary_path}")
     print(f"{'='*60}\n")
 
