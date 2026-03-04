@@ -188,7 +188,7 @@ class BayesianOptimizer:
         self._vref_target = self.specs["vref"]["target_V"]
         self._vref_tol = self.specs["vref"]["tolerance_V"]
 
-    def run(self, seed: int = 42) -> OptimizationResult:
+    def run(self, seed: int = 42, progress_callback: Any | None = None) -> OptimizationResult:
         """Execute the Bayesian Optimization loop.
 
         Parameters
@@ -229,6 +229,17 @@ class BayesianOptimizer:
                 if err < best_error:
                     best_error = err
                     best_params = params
+
+            if progress_callback is not None:
+                progress_callback(
+                    entry,
+                    {
+                        "n_simulations": n_sim,
+                        "n_spec_pass": n_pass,
+                        "spec_pass_rate": n_pass / n_sim if n_sim else 0.0,
+                        "best_error_V": best_error if best_error < np.inf else None,
+                    },
+                )
 
         # Phase 2: BO loop
         logger.info("=== BO Phase 2: Bayesian loop (budget %d) ===", self.budget - n_sim)
@@ -279,6 +290,17 @@ class BayesianOptimizer:
                         "New best: vref=%.4f V, error=%.4f V (iter %d)",
                         entry["vref_V"], err, n_sim,
                     )
+
+            if progress_callback is not None:
+                progress_callback(
+                    entry,
+                    {
+                        "n_simulations": n_sim,
+                        "n_spec_pass": n_pass,
+                        "spec_pass_rate": n_pass / n_sim if n_sim else 0.0,
+                        "best_error_V": best_error if best_error < np.inf else None,
+                    },
+                )
 
         best_vref = None
         if best_params:

@@ -23,6 +23,8 @@ import json
 import logging
 import math
 import sys
+import threading
+from queue import Queue
 from pathlib import Path
 
 from flask import Flask, Response, request
@@ -42,13 +44,12 @@ app = Flask(__name__)
 CORS(app)
 
 
-def _safe_json(data) -> Response:
-    """Serialize *data* to a JSON Response, replacing NaN/Inf with null.
+def _sanitize_json(data):
+    """Return a JSON-safe object, replacing NaN/Inf with null-equivalent.
 
     Python's ``json`` module emits ``NaN`` and ``Infinity`` for the
     corresponding float values, but these are not valid JSON and cause
-    ``JSON.parse`` to fail in JavaScript.  We do a recursive walk and
-    replace them with ``None`` (→ JSON ``null``) before serialising.
+    ``JSON.parse`` to fail in JavaScript.
     """
 
     def _sanitize(obj):
@@ -60,8 +61,20 @@ def _safe_json(data) -> Response:
             return [_sanitize(v) for v in obj]
         return obj
 
+    return _sanitize(data)
+
+
+def _safe_json(data) -> Response:
+    """Serialize *data* to a JSON Response, replacing NaN/Inf with null.
+
+    Python's ``json`` module emits ``NaN`` and ``Infinity`` for the
+    corresponding float values, but these are not valid JSON and cause
+    ``JSON.parse`` to fail in JavaScript.  We do a recursive walk and
+    replace them with ``None`` (→ JSON ``null``) before serialising.
+    """
+
     return Response(
-        json.dumps(_sanitize(data)),
+        json.dumps(_sanitize_json(data)),
         status=200,
         mimetype="application/json",
     )
@@ -240,6 +253,96 @@ def optimize():
     payload = result.to_dict()
     payload["convergence"] = convergence
     return _safe_json(payload)
+
+
+@app.get("/api/optimize/stream")
+def optimize_stream():
+    """Stream optimizer progress via Server-Sent Events (SSE).
+
+    Query params (all optional): budget, n_init, seed.
+    Emits events:
+      - progress: per-iteration update (entry + running summary)
+      - final: full optimization payload, same shape as /api/optimize
+      - api_error: optimizer failure details
+      - done: stream completion marker
+    """
+    budget = int(request.args.get("budget", 20))
+    n_init = int(request.args.get("n_init", 5))
+    seed = int(request.args.get("seed", 42))
+
+    budget = max(1, min(budget, _MAX_BUDGET))
+    n_init = max(1, min(n_init, budget))
+
+    def _sse(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(_sanitize_json(data))}\n\n"
+
+    def event_stream():
+        queue: Queue[tuple[str, dict]] = Queue()
+
+        def worker() -> None:
+            try:
+                from ml.optimize import BayesianOptimizer  # noqa: PLC0415
+
+                runner = _get_runner()
+                opt = BayesianOptimizer(runner=runner, budget=budget, n_init=n_init)
+
+                def on_progress(entry: dict, summary: dict) -> None:
+                    queue.put(
+                        (
+                            "progress",
+                            {
+                                "entry": entry,
+                                "iteration": entry.get("iteration", 0),
+                                **summary,
+                            },
+                        )
+                    )
+
+                result = opt.run(seed=seed, progress_callback=on_progress)
+
+                vref_target = opt.specs["vref"]["target_V"]
+                convergence = []
+                best_so_far = float("inf")
+                for entry in result.history:
+                    vref = entry.get("vref_V")
+                    if vref is not None:
+                        err = abs(vref - vref_target)
+                        if err < best_so_far:
+                            best_so_far = err
+                    convergence.append(
+                        {
+                            "iter": entry.get("iteration", len(convergence)),
+                            "best_error_V": best_so_far if best_so_far < float("inf") else None,
+                        }
+                    )
+
+                payload = result.to_dict()
+                payload["convergence"] = convergence
+                queue.put(("final", payload))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Optimizer streaming error")
+                queue.put(("api_error", {"error": str(exc)}))
+            finally:
+                queue.put(("done", {"ok": True}))
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+
+        while True:
+            event_name, payload = queue.get()
+            yield _sse(event_name, payload)
+            if event_name == "done":
+                break
+
+    return Response(
+        event_stream(),
+        mimetype="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
