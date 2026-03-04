@@ -924,7 +924,7 @@ export default function App() {
       streamRef.current = null;
     }
 
-    const query = new URLSearchParams({ budget: '20', n_init: '5', seed: '42' });
+    const query = new URLSearchParams({ budget: '50', n_init: '10', seed: '42' });
     const source = new EventSource(`/api/optimize/stream?${query.toString()}`);
     streamRef.current = source;
 

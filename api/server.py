@@ -181,8 +181,8 @@ def optimize():
     Request body (JSON, all fields optional)::
 
         {
-            "budget":  20,
-            "n_init":  5,
+            "budget":  50,
+            "n_init":  10,
             "seed":    42
         }
 
@@ -216,8 +216,8 @@ def optimize():
     simulated point will contain an error string but the optimizer still runs.
     """
     body = request.get_json(silent=True) or {}
-    budget = int(body.get("budget", 20))
-    n_init = int(body.get("n_init", 5))
+    budget = int(body.get("budget", 50))
+    n_init = int(body.get("n_init", 10))
     seed = int(body.get("seed", 42))
 
     budget = max(1, min(budget, _MAX_BUDGET))  # prevent excessive computation
@@ -274,8 +274,8 @@ def optimize_stream():
       - api_error: optimizer failure details
       - done: stream completion marker
     """
-    budget = int(request.args.get("budget", 20))
-    n_init = int(request.args.get("n_init", 5))
+    budget = int(request.args.get("budget", 50))
+    n_init = int(request.args.get("n_init", 10))
     seed = int(request.args.get("seed", 42))
 
     budget = max(1, min(budget, _MAX_BUDGET))

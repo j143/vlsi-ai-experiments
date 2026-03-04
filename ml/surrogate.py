@@ -180,7 +180,7 @@ class _BaseSurrogate:
 
 
 class GaussianProcessSurrogate(_BaseSurrogate):
-    """Gaussian Process surrogate with Matérn-5/2 kernel.
+    """Gaussian Process surrogate with Matérn-3/2 kernel.
 
     Provides calibrated uncertainty estimates, making it the recommended model
     for Bayesian optimization loops with small datasets (< 500 samples).
@@ -202,7 +202,11 @@ class GaussianProcessSurrogate(_BaseSurrogate):
         self._model: GaussianProcessRegressor | None = None
 
     def _train(self, X_scaled: np.ndarray, y_scaled: np.ndarray) -> None:
-        kernel = ConstantKernel(1.0) * Matern(nu=2.5, length_scale=np.ones(X_scaled.shape[1]))
+        kernel = ConstantKernel(1.0, (1e-3, 1e3)) * Matern(
+            nu=1.5,
+            length_scale=np.ones(X_scaled.shape[1]),
+            length_scale_bounds=(1e-3, 1e3),
+        )
         self._model = GaussianProcessRegressor(
             kernel=kernel,
             n_restarts_optimizer=self.n_restarts,
@@ -350,6 +354,7 @@ def _generate_synthetic_data(n: int = 100, seed: int = 42) -> pd.DataFrame:
         # Brokaw formula: Vref ≈ Vbe + (R1/R2) * VT * ln(N)
         Vref = Vbe + (p["R1"] / p["R2"]) * VT * float(np.log(p["N"]))
         Vref += rng.normal(0, 0.002)  # ±2 mV simulation noise
+        Vref = float(np.clip(Vref, 0.55, 3.4))
         iq_uA = Vref / p["R1"] * 1e6
         rows.append({**p, "vref_V": float(Vref), "iq_uA": float(iq_uA), "error": ""})
 
