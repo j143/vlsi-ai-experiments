@@ -238,7 +238,7 @@ function SpecRow({ spec }) {
   );
 }
 
-function CandidateRow({ c, selected, onClick }) {
+function CandidateRow({ c, selected, onClick, bestEffort }) {
   return (
     <div
       onClick={onClick}
@@ -251,7 +251,7 @@ function CandidateRow({ c, selected, onClick }) {
         borderRadius: '0.375rem',
         cursor: 'pointer',
         backgroundColor: selected ? '#0f172a' : 'transparent',
-        borderLeft: selected ? '2px solid #38bdf8' : '2px solid transparent',
+        borderLeft: selected ? '2px solid #38bdf8' : bestEffort ? '2px solid #fbbf24' : '2px solid transparent',
         marginBottom: '0.25rem',
       }}
     >
@@ -261,7 +261,7 @@ function CandidateRow({ c, selected, onClick }) {
       <span style={{ fontSize: '0.7rem', color: '#94a3b8', textAlign: 'right' }}>{c.err_mV != null ? `±${c.err_mV}` : c.spice}</span>
       <span style={{ fontSize: '0.7rem', color: '#94a3b8', textAlign: 'right' }}>{c.power}</span>
       <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <span style={S.badge(c.status)}>{c.status}</span>
+        <span style={S.badge(bestEffort ? 'warn' : c.status)}>{bestEffort ? 'best' : c.status}</span>
       </div>
     </div>
   );
@@ -297,6 +297,16 @@ function ConvergenceChart({ data }) {
       <text x={pad.l - 4} y={yScale(maxLoss) + 3} fill="#475569" fontSize="9" textAnchor="end">0.9</text>
       <text x={pad.l - 4} y={yScale(0.1) + 3} fill="#475569" fontSize="9" textAnchor="end">0.1</text>
       <text x={W / 2} y={H - 2} fill="#475569" fontSize="9" textAnchor="middle">Iteration</text>
+      <text
+        x={10}
+        y={pad.t + iH / 2}
+        fill="#475569"
+        fontSize="9"
+        textAnchor="middle"
+        transform={`rotate(-90 10 ${pad.t + iH / 2})`}
+      >
+        Best |Vref-target| (V)
+      </text>
     </svg>
   );
 }
@@ -354,6 +364,8 @@ function LayoutViewer({ layer }) {
 function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult }) {
   const displayCandidates = candidates || CANDIDATES;
   const displayConvergence = convergenceData?.length ? convergenceData : CONVERGENCE;
+  const anyPass = displayCandidates.some((c) => c.status === 'pass');
+  const bestEffortId = anyPass ? null : displayCandidates[0]?.id;
   const lastEntry = displayConvergence[displayConvergence.length - 1];
   const bestLoss = lastEntry?.loss ?? lastEntry?.best_error_V;
   const convergedAt = displayConvergence.length;
@@ -414,6 +426,7 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
                 c={c}
                 selected={selectedCandidate?.id === c.id}
                 onClick={() => setSelectedCandidate(c)}
+                bestEffort={bestEffortId === c.id}
               />
             ))}
           </div>
@@ -423,7 +436,7 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
           <div style={S.cardTitle}><BarChart3 size={13} />Optimizer Convergence</div>
           <ConvergenceChart data={displayConvergence} />
           <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-            <span style={S.label}>Best error: <strong style={{ color: '#38bdf8' }}>{bestLoss != null ? bestLoss.toFixed(4) : '—'}</strong></span>
+            <span style={S.label}>Best |Vref-target|: <strong style={{ color: '#38bdf8' }}>{bestLoss != null ? `${(bestLoss * 1000).toFixed(1)} mV` : '—'}</strong></span>
             <span style={S.label}>Iterations: <strong style={{ color: '#38bdf8' }}>{convergedAt}</strong></span>
           </div>
         </div>
@@ -437,8 +450,8 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
             {[
               { label: 'Vref', value: selectedCandidate ? `${parseFloat(selectedCandidate.vref_mV ?? selectedCandidate.surrogate ?? 0).toFixed(1)} mV` : '—' },
               { label: '|Err| from 1200mV', value: selectedCandidate?.err_mV != null ? `${selectedCandidate.err_mV} mV` : '—' },
-              { label: 'PSRR', value: optimResult ? '—' : '-61.2 dB' },
-              { label: 'Iq', value: optimResult ? '—' : '9.8 µA' },
+              { label: 'PSRR', value: selectedCandidate?.psrr_dB != null ? `${selectedCandidate.psrr_dB} dB` : optimResult ? '—' : '-61.2 dB' },
+              { label: 'Iq', value: selectedCandidate?.iq_uA != null ? `${selectedCandidate.iq_uA} µA` : optimResult ? '—' : '9.8 µA' },
               { label: 'Power', value: selectedCandidate?.power ?? '—' },
               {
                 label: 'Status',
@@ -670,14 +683,21 @@ function _historyToCandidates(history) {
     .filter((e) => e.vref_V != null)
     .sort((a, b) => Math.abs(a.vref_V - 1.2) - Math.abs(b.vref_V - 1.2))
     .slice(0, 3)
-    .map((e) => ({
-      id: `BG-${String(e.iteration + 1).padStart(3, '0')}`,
-      variables: `N=${e.params.N}, W=${((e.params.W_P || 4e-6) * 1e6).toFixed(1)}µm`,
-      vref_mV: (e.vref_V * 1000).toFixed(1),
-      err_mV: Math.abs(e.vref_V * 1000 - 1200).toFixed(1),
-      power: e.iq_uA != null ? `${(e.iq_uA * 1.8).toFixed(1)}µW` : '—',
-      status: e.spec_vref_pass ? 'pass' : 'fail',
-    }));
+    .map((e) => {
+      const checks = [e.spec_vref_pass, e.spec_iq_pass, e.spec_psrr_pass].filter((v) => v != null);
+      const allKnownChecksPass = checks.length > 0 && checks.every(Boolean);
+
+      return {
+        id: `BG-${String(e.iteration + 1).padStart(3, '0')}`,
+        variables: `N=${e.params.N}, W=${((e.params.W_P || 4e-6) * 1e6).toFixed(1)}µm`,
+        vref_mV: (e.vref_V * 1000).toFixed(1),
+        err_mV: Math.abs(e.vref_V * 1000 - 1200).toFixed(1),
+        iq_uA: e.iq_uA != null ? Number(e.iq_uA.toFixed(2)) : null,
+        psrr_dB: e.psrr_dB != null ? Number(e.psrr_dB.toFixed(1)) : null,
+        power: e.iq_uA != null ? `${(e.iq_uA * 1.8).toFixed(1)}µW` : '—',
+        status: allKnownChecksPass ? 'pass' : 'fail',
+      };
+    });
 }
 
 export default function App() {
