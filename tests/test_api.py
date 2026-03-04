@@ -236,3 +236,15 @@ class TestProjectAndExport:
         assert data["filename"].endswith(".sp")
         assert isinstance(data["netlist_text"], str)
         assert len(data["netlist_text"]) > 0
+
+    def test_project_files_lists_netlists(self, client):
+        resp = client.get("/api/project/files?kind=netlists")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["kind"] == "netlists"
+        assert isinstance(data["files"], list)
+
+    def test_project_files_invalid_kind(self, client):
+        resp = client.get("/api/project/files?kind=bad")
+        assert resp.status_code == 400

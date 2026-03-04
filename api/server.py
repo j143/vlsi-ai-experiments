@@ -91,6 +91,8 @@ def _safe_json(data) -> Response:
 # Prevents runaway computation in the synchronous request handler.
 _MAX_BUDGET = 100
 _PROJECTS_DIR = _REPO_ROOT / "results" / "projects"
+_DATASETS_DIR = _REPO_ROOT / "datasets"
+_NETLISTS_DIR = _REPO_ROOT / "bandgap" / "netlists"
 
 # Single shared runner instance (stateless — safe to share across requests).
 # BandgapRunner.__init__ only reads files; it does NOT invoke ngspice, so this
@@ -468,6 +470,31 @@ def project_save():
             "saved_path": str(out_path.relative_to(_REPO_ROOT)),
         }
     )
+
+
+@app.get("/api/project/files")
+def project_files():
+    """List project files for lightweight UI navigation actions."""
+    kind = str(request.args.get("kind", "datasets")).strip().lower()
+    if kind == "datasets":
+        base = _DATASETS_DIR
+        patterns = ["*.csv", "*.parquet", "*.npy"]
+    elif kind == "netlists":
+        base = _NETLISTS_DIR
+        patterns = ["*.sp", "*.cir"]
+    else:
+        return Response(
+            json.dumps({"error": "kind must be one of: datasets, netlists"}),
+            status=400,
+            mimetype="application/json",
+        )
+
+    files: list[str] = []
+    if base.exists():
+        for pattern in patterns:
+            files.extend(sorted(path.name for path in base.glob(pattern) if path.is_file()))
+
+    return _safe_json({"ok": True, "kind": kind, "files": files})
 
 
 @app.post("/api/netlist/export")

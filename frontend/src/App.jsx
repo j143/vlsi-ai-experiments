@@ -735,6 +735,8 @@ function _paramsFromDesignValues(designValues) {
   };
 }
 
+const FALLBACK_API_BASE = 'http://127.0.0.1:5000/api';
+
 // --- Main App ---
 
 const NAV_ITEMS = [
@@ -821,19 +823,55 @@ export default function App() {
   const [layoutData, setLayoutData] = useState(null);
   const [layoutError, setLayoutError] = useState(null);
   const [uiNotice, setUiNotice] = useState(null);
+  const [apiBase, setApiBase] = useState(import.meta.env.VITE_API_BASE || '/api');
   const logRef = useRef(null);
   const streamRef = useRef(null);
 
+  const apiUrl = (path, base = apiBase) => `${base.replace(/\/$/, '')}${path}`;
+
+  const fetchApiJson = async (path, options = {}, allowFallback = true) => {
+    const bases = [apiBase, ...(allowFallback && apiBase !== FALLBACK_API_BASE ? [FALLBACK_API_BASE] : [])];
+    let lastErr = null;
+
+    for (const base of bases) {
+      try {
+        const resp = await fetch(apiUrl(path, base), options);
+        const text = await resp.text();
+        let data = null;
+        try {
+          data = JSON.parse(text);
+        } catch {
+          throw new Error(`API returned non-JSON response (${resp.status})`);
+        }
+
+        if (!resp.ok) {
+          throw new Error(data?.error || `HTTP ${resp.status}`);
+        }
+
+        if (base !== apiBase) {
+          setApiBase(base);
+          setUiNotice(`Connected API via ${base}`);
+        }
+        return data;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+
+    throw lastErr || new Error('API request failed');
+  };
+
   // Probe backend status on mount
   useEffect(() => {
-    fetch('/api/status')
-      .then((r) => r.json())
+    fetchApiJson('/status')
       .then((data) => setServerStatus(data))
       .catch(() => setServerStatus({ ok: false, ngspice_available: false }));
 
-    fetch('/api/layout/preview?seed=42&patch_size=32')
-      .then((r) => r.json())
-      .then((data) => setLayoutData(data))
+    fetchApiJson('/layout/preview?seed=42&patch_size=32')
+      .then((data) => {
+        setLayoutData(data);
+        setLayoutError(null);
+      })
       .catch(() => setLayoutError('Could not load layout preview'));
   }, []);
 
@@ -860,15 +898,11 @@ export default function App() {
 
       try {
         const useSynthetic = serverStatus.ngspice_available === false;
-        const resp = await fetch('/api/simulate', {
+        const data = await fetchApiJson('/simulate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ params: simParams, use_synthetic: useSynthetic }),
         });
-        const data = await resp.json();
-        if (!resp.ok || data.error) {
-          throw new Error(data.error || 'estimate failed');
-        }
 
         setLiveEstimate({
           vref_mV: data.vref_V != null ? data.vref_V * 1000 : null,
@@ -937,84 +971,96 @@ export default function App() {
       seed: '42',
       use_synthetic: serverStatus.ngspice_available === false ? 'true' : 'false',
     });
-    const source = new EventSource(`/api/optimize/stream?${query.toString()}`);
-    streamRef.current = source;
 
-    source.addEventListener('progress', (evt) => {
-      const payload = JSON.parse(evt.data);
-      setOptimResult((prev) => {
-        const current = prev || {
-          best_params: {},
-          best_vref_V: null,
-          n_simulations: 0,
-          n_spec_pass: 0,
-          spec_pass_rate: 0,
-          history: [],
-          convergence: [],
-        };
+    const startStream = (base, allowFallback) => {
+      const source = new EventSource(`${base.replace(/\/$/, '')}/optimize/stream?${query.toString()}`);
+      streamRef.current = source;
 
-        const nextHistory = [...(current.history || []), payload.entry];
-        const nextConvergence = [
-          ...(current.convergence || []),
-          {
-            iter: payload.iteration,
-            best_error_V: payload.best_error_V,
-            best_error_std_V: payload.best_error_std_V,
-          },
-        ];
+      source.addEventListener('progress', (evt) => {
+        const payload = JSON.parse(evt.data);
+        setOptimResult((prev) => {
+          const current = prev || {
+            best_params: {},
+            best_vref_V: null,
+            n_simulations: 0,
+            n_spec_pass: 0,
+            spec_pass_rate: 0,
+            history: [],
+            convergence: [],
+          };
 
-        let bestVref = current.best_vref_V;
-        if (payload.entry?.vref_V != null) {
-          if (bestVref == null || Math.abs(payload.entry.vref_V - 1.2) < Math.abs(bestVref - 1.2)) {
-            bestVref = payload.entry.vref_V;
+          const nextHistory = [...(current.history || []), payload.entry];
+          const nextConvergence = [
+            ...(current.convergence || []),
+            {
+              iter: payload.iteration,
+              best_error_V: payload.best_error_V,
+              best_error_std_V: payload.best_error_std_V,
+            },
+          ];
+
+          let bestVref = current.best_vref_V;
+          if (payload.entry?.vref_V != null) {
+            if (bestVref == null || Math.abs(payload.entry.vref_V - 1.2) < Math.abs(bestVref - 1.2)) {
+              bestVref = payload.entry.vref_V;
+            }
           }
-        }
 
-        return {
-          ...current,
-          history: nextHistory,
-          convergence: nextConvergence,
-          n_simulations: payload.n_simulations,
-          n_spec_pass: payload.n_spec_pass,
-          spec_pass_rate: payload.spec_pass_rate,
-          best_vref_V: bestVref,
-        };
+          return {
+            ...current,
+            history: nextHistory,
+            convergence: nextConvergence,
+            n_simulations: payload.n_simulations,
+            n_spec_pass: payload.n_spec_pass,
+            spec_pass_rate: payload.spec_pass_rate,
+            best_vref_V: bestVref,
+          };
+        });
       });
-    });
 
-    source.addEventListener('final', (evt) => {
-      const data = JSON.parse(evt.data);
-      setOptimResult(data);
-      if (data.history?.length) {
-        const topCands = _historyToCandidates(data.history);
-        if (topCands.length) setSelectedCandidate(topCands[0]);
-      }
-    });
+      source.addEventListener('final', (evt) => {
+        const data = JSON.parse(evt.data);
+        setOptimResult(data);
+        if (data.history?.length) {
+          const topCands = _historyToCandidates(data.history);
+          if (topCands.length) setSelectedCandidate(topCands[0]);
+        }
+      });
 
-    source.addEventListener('api_error', (evt) => {
-      const data = JSON.parse(evt.data);
-      setApiError(data.error || 'Streaming optimize failed');
-    });
+      source.addEventListener('api_error', (evt) => {
+        const data = JSON.parse(evt.data);
+        setApiError(data.error || 'Streaming optimize failed');
+      });
 
-    source.addEventListener('done', () => {
-      setIsSimulating(false);
-      source.close();
-      if (streamRef.current === source) streamRef.current = null;
-    });
-
-    source.onerror = () => {
-      if (streamRef.current === source) {
-        setApiError('Optimization stream disconnected');
+      source.addEventListener('done', () => {
         setIsSimulating(false);
         source.close();
+        if (streamRef.current === source) streamRef.current = null;
+      });
+
+      source.onerror = () => {
+        if (streamRef.current !== source) return;
+        source.close();
         streamRef.current = null;
-      }
+
+        if (allowFallback && base !== FALLBACK_API_BASE) {
+          setUiNotice(`Retrying optimizer stream via ${FALLBACK_API_BASE}`);
+          setApiBase(FALLBACK_API_BASE);
+          startStream(FALLBACK_API_BASE, false);
+          return;
+        }
+
+        setApiError('Optimization stream disconnected');
+        setIsSimulating(false);
+      };
     };
+
+    startStream(apiBase, true);
   };
 
   const handleSaveProject = async () => {
     try {
-      const resp = await fetch('/api/project/save', {
+      const data = await fetchApiJson('/project/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1028,8 +1074,6 @@ export default function App() {
           },
         }),
       });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'save failed');
       setUiNotice(`Project saved: ${data.saved_path}`);
     } catch (err) {
       setApiError(err.message);
@@ -1039,13 +1083,11 @@ export default function App() {
   const handleExportNetlist = async () => {
     const exportParams = selectedCandidate?.params || _paramsFromDesignValues(designValues);
     try {
-      const resp = await fetch('/api/netlist/export', {
+      const data = await fetchApiJson('/netlist/export', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ params: exportParams }),
       });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || 'export failed');
 
       const blob = new Blob([data.netlist_text], { type: 'text/plain;charset=utf-8' });
       const url = URL.createObjectURL(blob);
@@ -1060,6 +1102,38 @@ export default function App() {
     } catch (err) {
       setApiError(err.message);
     }
+  };
+
+  const handleOpenDatasets = async () => {
+    try {
+      const data = await fetchApiJson('/project/files?kind=datasets');
+      const preview = data.files.slice(0, 3).join(', ');
+      setUiNotice(data.files.length ? `Datasets (${data.files.length}): ${preview}` : 'No datasets found yet');
+    } catch (err) {
+      setApiError(err.message);
+    }
+  };
+
+  const handleOpenNetlists = async () => {
+    try {
+      const data = await fetchApiJson('/project/files?kind=netlists');
+      const preview = data.files.slice(0, 3).join(', ');
+      setUiNotice(data.files.length ? `Netlists (${data.files.length}): ${preview}` : 'No netlists found');
+    } catch (err) {
+      setApiError(err.message);
+    }
+  };
+
+  const handleSettings = () => {
+    const nextBase = window.prompt('API base URL (e.g., /api or http://127.0.0.1:5000/api)', apiBase);
+    if (nextBase && nextBase.trim()) {
+      setApiBase(nextBase.trim());
+      setUiNotice(`API base set to ${nextBase.trim()}`);
+    }
+  };
+
+  const handleOpenBranch = () => {
+    window.open('https://github.com/j143/vlsi-ai-experiments/pull/13', '_blank');
   };
 
   // Summarise backend status for bottom bar
@@ -1094,9 +1168,9 @@ export default function App() {
           </div>
         </div>
         <div style={S.topBarRight}>
-          <button style={S.btn()} title="Simulation history"><History size={14} /></button>
-          <button style={S.btn()} title="Branch"><GitBranch size={14} /></button>
-          <button style={S.btn()} title="Settings"><Settings size={14} /></button>
+          <button style={S.btn()} title="Simulation history" onClick={() => setActiveTab('verification')}><History size={14} /></button>
+          <button style={S.btn()} title="Branch" onClick={handleOpenBranch}><GitBranch size={14} /></button>
+          <button style={S.btn()} title="Settings" onClick={handleSettings}><Settings size={14} /></button>
           <button style={S.btn('primary')} onClick={handleSaveProject}>
             <Save size={13} />Save Project
           </button>
@@ -1115,10 +1189,10 @@ export default function App() {
           ))}
           <div style={{ marginTop: 'auto' }}>
             <div style={S.sideSection}>Project</div>
-            <button style={S.navItem(false)}>
+            <button style={S.navItem(false)} onClick={handleOpenDatasets}>
               <Database size={15} />Datasets
             </button>
-            <button style={S.navItem(false)}>
+            <button style={S.navItem(false)} onClick={handleOpenNetlists}>
               <FileCode size={15} />Netlists
             </button>
           </div>
