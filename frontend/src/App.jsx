@@ -714,6 +714,7 @@ export default function App() {
   const [optimResult, setOptimResult] = useState(null);
   const [apiError, setApiError] = useState(null);
   const logRef = useRef(null);
+  const streamRef = useRef(null);
 
   // Probe backend status on mount
   useEffect(() => {
@@ -727,6 +728,15 @@ export default function App() {
   useEffect(() => {
     if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
   }, [optimResult]);
+
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        streamRef.current.close();
+        streamRef.current = null;
+      }
+    };
+  }, []);
 
   // Derive live candidates from optimizer history (top 3 by closest Vref)
   const liveCandidates = optimResult
@@ -759,27 +769,91 @@ export default function App() {
   const handleRunOptimizer = async () => {
     setIsSimulating(true);
     setApiError(null);
-    try {
-      const resp = await fetch('/api/optimize', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ budget: 20, n_init: 5, seed: 42 }),
+    setOptimResult({
+      best_params: {},
+      best_vref_V: null,
+      n_simulations: 0,
+      n_spec_pass: 0,
+      spec_pass_rate: 0,
+      history: [],
+      convergence: [],
+    });
+
+    if (streamRef.current) {
+      streamRef.current.close();
+      streamRef.current = null;
+    }
+
+    const query = new URLSearchParams({ budget: '20', n_init: '5', seed: '42' });
+    const source = new EventSource(`/api/optimize/stream?${query.toString()}`);
+    streamRef.current = source;
+
+    source.addEventListener('progress', (evt) => {
+      const payload = JSON.parse(evt.data);
+      setOptimResult((prev) => {
+        const current = prev || {
+          best_params: {},
+          best_vref_V: null,
+          n_simulations: 0,
+          n_spec_pass: 0,
+          spec_pass_rate: 0,
+          history: [],
+          convergence: [],
+        };
+
+        const nextHistory = [...(current.history || []), payload.entry];
+        const nextConvergence = [
+          ...(current.convergence || []),
+          { iter: payload.iteration, best_error_V: payload.best_error_V },
+        ];
+
+        let bestVref = current.best_vref_V;
+        if (payload.entry?.vref_V != null) {
+          if (bestVref == null || Math.abs(payload.entry.vref_V - 1.2) < Math.abs(bestVref - 1.2)) {
+            bestVref = payload.entry.vref_V;
+          }
+        }
+
+        return {
+          ...current,
+          history: nextHistory,
+          convergence: nextConvergence,
+          n_simulations: payload.n_simulations,
+          n_spec_pass: payload.n_spec_pass,
+          spec_pass_rate: payload.spec_pass_rate,
+          best_vref_V: bestVref,
+        };
       });
-      if (!resp.ok) {
-        const err = await resp.json().catch(() => ({ error: resp.statusText }));
-        throw new Error(err.error || resp.statusText);
-      }
-      const data = await resp.json();
+    });
+
+    source.addEventListener('final', (evt) => {
+      const data = JSON.parse(evt.data);
       setOptimResult(data);
       if (data.history?.length) {
         const topCands = _historyToCandidates(data.history);
         if (topCands.length) setSelectedCandidate(topCands[0]);
       }
-    } catch (err) {
-      setApiError(err.message);
-    } finally {
+    });
+
+    source.addEventListener('api_error', (evt) => {
+      const data = JSON.parse(evt.data);
+      setApiError(data.error || 'Streaming optimize failed');
+    });
+
+    source.addEventListener('done', () => {
       setIsSimulating(false);
-    }
+      source.close();
+      if (streamRef.current === source) streamRef.current = null;
+    });
+
+    source.onerror = () => {
+      if (streamRef.current === source) {
+        setApiError('Optimization stream disconnected');
+        setIsSimulating(false);
+        source.close();
+        streamRef.current = null;
+      }
+    };
   };
 
   // Summarise backend status for bottom bar

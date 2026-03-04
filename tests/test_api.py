@@ -120,3 +120,13 @@ class TestOptimize:
         """Calling /api/optimize with no body should work."""
         resp = client.post("/api/optimize", json={})
         assert resp.status_code == 200
+
+    def test_stream_endpoint_emits_progress_and_final(self, client):
+        resp = client.get("/api/optimize/stream?budget=3&n_init=2&seed=0")
+        assert resp.status_code == 200
+        assert resp.mimetype == "text/event-stream"
+
+        body = resp.get_data(as_text=True)
+        assert "event: progress" in body
+        assert "event: final" in body
+        assert "event: done" in body
