@@ -382,7 +382,7 @@ function LayoutViewer({ layer, layoutData }) {
 
 // --- Tab views ---
 
-function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult }) {
+function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult, liveEstimate, isEstimating, estimateError }) {
   const displayCandidates = candidates || CANDIDATES;
   const displayConvergence = convergenceData?.length ? convergenceData : CONVERGENCE;
   const anyPass = displayCandidates.some((c) => c.status === 'pass');
@@ -409,6 +409,17 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
               onChange={(val) => setDesignValues((prev) => ({ ...prev, [v.id]: val }))}
             />
           ))}
+          <div style={{ backgroundColor: '#0f172a', borderRadius: '0.375rem', padding: '0.5rem 0.625rem', marginTop: '0.25rem' }}>
+            <div style={{ ...S.label, marginBottom: '0.25rem' }}>
+              Live estimate {isEstimating ? '(updating...)' : ''}
+            </div>
+            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <span style={S.label}>Vref: <strong style={{ color: '#38bdf8' }}>{liveEstimate?.vref_mV != null ? `${liveEstimate.vref_mV.toFixed(1)} mV` : '—'}</strong></span>
+              <span style={S.label}>Iq: <strong style={{ color: '#38bdf8' }}>{liveEstimate?.iq_uA != null ? `${liveEstimate.iq_uA.toFixed(2)} µA` : '—'}</strong></span>
+              <span style={S.label}>Vref Spec: <strong style={{ color: liveEstimate?.spec_vref ? '#6ee7b7' : '#fca5a5' }}>{liveEstimate?.spec_vref == null ? '—' : liveEstimate.spec_vref ? 'PASS' : 'FAIL'}</strong></span>
+            </div>
+            {estimateError && <div style={{ ...S.label, color: '#fbbf24', marginTop: '0.25rem' }}>{estimateError}</div>}
+          </div>
           <div style={{ marginTop: 'auto', paddingTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
             <button style={S.btn('primary', { flex: 1 })} onClick={onRun} disabled={isSimulating}>
               {isSimulating ? <RefreshCw size={13} /> : <Play size={13} />}
@@ -740,6 +751,9 @@ export default function App() {
   const [serverStatus, setServerStatus] = useState({ ok: null, ngspice_available: null });
   const [optimResult, setOptimResult] = useState(null);
   const [apiError, setApiError] = useState(null);
+  const [liveEstimate, setLiveEstimate] = useState(null);
+  const [isEstimating, setIsEstimating] = useState(false);
+  const [estimateError, setEstimateError] = useState(null);
   const [layoutData, setLayoutData] = useState(null);
   const [layoutError, setLayoutError] = useState(null);
   const logRef = useRef(null);
@@ -771,6 +785,48 @@ export default function App() {
       }
     };
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      setIsEstimating(true);
+      setEstimateError(null);
+
+      const nRatio = Math.max(1, Math.round(designValues.r_ratio));
+      const iBiasA = Math.max(0.1, designValues.i_bias) * 1e-6;
+      const r1 = 1.8 / iBiasA;
+      const simParams = {
+        N: nRatio,
+        R1: r1,
+        R2: r1 / nRatio,
+        W_P: designValues.w_m1 * 1e-6,
+        L_P: 1e-6,
+      };
+
+      try {
+        const resp = await fetch('/api/simulate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ params: simParams }),
+        });
+        const data = await resp.json();
+        if (!resp.ok || data.error) {
+          throw new Error(data.error || 'estimate failed');
+        }
+
+        setLiveEstimate({
+          vref_mV: data.vref_V != null ? data.vref_V * 1000 : null,
+          iq_uA: data.iq_uA ?? null,
+          spec_vref: data.spec_checks?.vref ?? null,
+        });
+      } catch (err) {
+        setEstimateError(err.message);
+      } finally {
+        setIsEstimating(false);
+      }
+    }, 350);
+
+    return () => clearTimeout(timer);
+  }, [designValues]);
 
   // Derive live candidates from optimizer history (top 3 by closest Vref)
   const liveCandidates = optimResult
@@ -973,6 +1029,9 @@ export default function App() {
               candidates={liveCandidates}
               convergenceData={liveConvergence}
               optimResult={optimResult}
+              liveEstimate={liveEstimate}
+              isEstimating={isEstimating}
+              estimateError={estimateError}
             />
           )}
           {activeTab === 'layout' && (
