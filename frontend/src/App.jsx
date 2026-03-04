@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import {
   Activity,
   Cpu,
@@ -351,7 +351,12 @@ function LayoutViewer({ layer }) {
 
 // --- Tab views ---
 
-function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues }) {
+function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult }) {
+  const displayCandidates = candidates || CANDIDATES;
+  const displayConvergence = convergenceData?.length ? convergenceData : CONVERGENCE;
+  const lastEntry = displayConvergence[displayConvergence.length - 1];
+  const bestLoss = lastEntry?.loss ?? lastEntry?.best_error_V;
+  const convergedAt = displayConvergence.length;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr 300px', gap: '1rem', minHeight: '0' }}>
       {/* Left: Controls */}
@@ -398,12 +403,12 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
             padding: '0 0.625rem 0.375rem',
             borderBottom: '1px solid #334155',
           }}>
-            {['ID', 'Variables', 'ML TC', 'Spice TC', 'Power', 'Status'].map((h) => (
+            {['ID', 'Variables', 'Vref (mV)', 'Vref', 'Power', 'Status'].map((h) => (
               <span key={h} style={{ fontSize: '0.65rem', color: '#475569', fontWeight: '600', textTransform: 'uppercase' }}>{h}</span>
             ))}
           </div>
           <div style={{ marginTop: '0.375rem' }}>
-            {CANDIDATES.map((c) => (
+            {displayCandidates.map((c) => (
               <CandidateRow
                 key={c.id}
                 c={c}
@@ -416,10 +421,10 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
 
         <div style={S.card()}>
           <div style={S.cardTitle}><BarChart3 size={13} />Optimizer Convergence</div>
-          <ConvergenceChart data={CONVERGENCE} />
+          <ConvergenceChart data={displayConvergence} />
           <div style={{ display: 'flex', gap: '1rem', marginTop: '0.5rem' }}>
-            <span style={S.label}>Best loss: <strong style={{ color: '#38bdf8' }}>0.091</strong></span>
-            <span style={S.label}>Converged at iter: <strong style={{ color: '#38bdf8' }}>28</strong></span>
+            <span style={S.label}>Best error: <strong style={{ color: '#38bdf8' }}>{bestLoss != null ? bestLoss.toFixed(4) : '—'}</strong></span>
+            <span style={S.label}>Iterations: <strong style={{ color: '#38bdf8' }}>{convergedAt}</strong></span>
           </div>
         </div>
       </div>
@@ -430,16 +435,14 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
           <div style={S.cardTitle}><Eye size={13} />Selected: {selectedCandidate?.id}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
             {[
-              { label: 'Vref', value: '1199.4 mV' },
-              { label: 'TempCo', value: (selectedCandidate?.spice ?? '—') + ' ppm/C' },
-              { label: 'PSRR', value: '-61.2 dB' },
-              { label: 'Iq', value: '9.8 µA' },
+              { label: 'Vref', value: selectedCandidate ? `${parseFloat(selectedCandidate.surrogate).toFixed(1)} mV` : '—' },
+              { label: 'TempCo', value: (selectedCandidate?.spice ?? '—') + ' mV' },
+              { label: 'PSRR', value: optimResult ? '—' : '-61.2 dB' },
+              { label: 'Iq', value: optimResult ? '—' : '9.8 µA' },
               { label: 'Power', value: selectedCandidate?.power ?? '—' },
               {
-                label: 'ML Error',
-                value: selectedCandidate
-                  ? `${(Math.abs(parseFloat(selectedCandidate.surrogate) - parseFloat(selectedCandidate.spice)) / parseFloat(selectedCandidate.spice) * 100).toFixed(1)}%`
-                  : '—',
+                label: 'Status',
+                value: selectedCandidate ? (selectedCandidate.status === 'pass' ? '✓ Pass' : '✗ Fail') : '—',
               },
             ].map(({ label, value }) => (
               <div key={label} style={{ backgroundColor: '#0f172a', borderRadius: '0.375rem', padding: '0.5rem 0.625rem' }}>
@@ -608,7 +611,8 @@ function VerificationTab() {
   );
 }
 
-function LogsTab() {
+function LogsTab({ logLines, logRef }) {
+  const lines = logLines || LOG_LINES;
   return (
     <div style={{ ...S.card(), height: '100%', gap: '0.75rem' }}>
       <div style={{ ...S.cardTitle, justifyContent: 'space-between' }}>
@@ -635,12 +639,12 @@ function LogsTab() {
         flex: 1,
         overflowY: 'auto',
         lineHeight: '1.7',
-      }}>
-        {LOG_LINES.map((line, i) => {
-          const isWarn = line.includes('WARN');
-          const isInfo = line.includes('INFO');
+      }} ref={logRef}>
+        {lines.map((line, i) => {
+          const isWarn = line.includes('WARN') || line.includes('FAIL');
+          const isApi = line.includes('[API]');
           return (
-            <div key={i} style={{ color: isWarn ? '#fbbf24' : isInfo ? '#94a3b8' : '#f8fafc' }}>
+            <div key={i} style={{ color: isWarn ? '#fbbf24' : isApi ? '#38bdf8' : '#94a3b8' }}>
               {line}
             </div>
           );
@@ -669,10 +673,117 @@ export default function App() {
     Object.fromEntries(DESIGN_VARS.map((v) => [v.id, v.default]))
   );
 
-  const handleRunOptimizer = () => {
+  // --- Backend state ---
+  const [serverStatus, setServerStatus] = useState({ ok: null, ngspice_available: null });
+  const [optimResult, setOptimResult] = useState(null);
+  const [apiError, setApiError] = useState(null);
+  const logRef = useRef(null);
+
+  // Probe backend status on mount
+  useEffect(() => {
+    fetch('/api/status')
+      .then((r) => r.json())
+      .then((data) => setServerStatus(data))
+      .catch(() => setServerStatus({ ok: false, ngspice_available: false }));
+  }, []);
+
+  // Scroll log panel to bottom when new results arrive
+  useEffect(() => {
+    if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [optimResult]);
+
+  // Derive live candidates from optimizer history (top 3 by closest Vref)
+  const liveCandidates = optimResult
+    ? [...optimResult.history]
+        .filter((e) => e.vref_V != null)
+        .sort((a, b) => Math.abs(a.vref_V - 1.2) - Math.abs(b.vref_V - 1.2))
+        .slice(0, 3)
+        .map((e) => ({
+          id: `BG-${String(e.iteration + 1).padStart(3, '0')}`,
+          variables: `N=${e.params.N}, W=${((e.params.W_P || 4e-6) * 1e6).toFixed(1)}µm`,
+          surrogate: (e.vref_V * 1000).toFixed(1),
+          spice: (e.vref_V * 1000).toFixed(1),
+          power: e.iq_uA != null ? `${(e.iq_uA * 1.8).toFixed(1)}µW` : '—',
+          status: e.spec_vref_pass ? 'pass' : 'fail',
+        }))
+    : CANDIDATES;
+
+  // Derive live convergence from optimizer response
+  const liveConvergence = optimResult?.convergence?.length
+    ? optimResult.convergence
+        .filter((c) => c.best_error_V != null)
+        .map((c) => ({ iter: c.iter + 1, loss: c.best_error_V }))
+    : CONVERGENCE;
+
+  // Derive live log lines from optimizer history
+  const liveLogs = optimResult
+    ? [
+        `[API] Optimizer finished — ${optimResult.n_simulations} simulations, ` +
+          `${optimResult.n_spec_pass} spec-pass (${(optimResult.spec_pass_rate * 100).toFixed(0)}%)`,
+        `[API] Best Vref: ${optimResult.best_vref_V != null ? (optimResult.best_vref_V * 1000).toFixed(2) + ' mV' : 'N/A'}`,
+        ...optimResult.history.map(
+          (e) =>
+            `[${String(e.iteration).padStart(2, '0')}] ${e.source.toUpperCase().padEnd(3)} ` +
+            `vref=${e.vref_V != null ? (e.vref_V * 1000).toFixed(2) + ' mV' : 'err'} ` +
+            `spec=${e.spec_vref_pass ? 'PASS' : 'FAIL'} ` +
+            `(${e.sim_time_s}s)`
+        ),
+      ]
+    : LOG_LINES;
+
+  const handleRunOptimizer = async () => {
     setIsSimulating(true);
-    setTimeout(() => setIsSimulating(false), 2000);
+    setApiError(null);
+    try {
+      const resp = await fetch('/api/optimize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ budget: 20, n_init: 5, seed: 42 }),
+      });
+      if (!resp.ok) {
+        const err = await resp.json().catch(() => ({ error: resp.statusText }));
+        throw new Error(err.error || resp.statusText);
+      }
+      const data = await resp.json();
+      setOptimResult(data);
+      if (data.history?.length) {
+        const topCands = [...data.history]
+          .filter((e) => e.vref_V != null)
+          .sort((a, b) => Math.abs(a.vref_V - 1.2) - Math.abs(b.vref_V - 1.2))
+          .slice(0, 3)
+          .map((e) => ({
+            id: `BG-${String(e.iteration + 1).padStart(3, '0')}`,
+            variables: `N=${e.params.N}, W=${((e.params.W_P || 4e-6) * 1e6).toFixed(1)}µm`,
+            surrogate: (e.vref_V * 1000).toFixed(1),
+            spice: (e.vref_V * 1000).toFixed(1),
+            power: e.iq_uA != null ? `${(e.iq_uA * 1.8).toFixed(1)}µW` : '—',
+            status: e.spec_vref_pass ? 'pass' : 'fail',
+          }));
+        if (topCands.length) setSelectedCandidate(topCands[0]);
+      }
+    } catch (err) {
+      setApiError(err.message);
+    } finally {
+      setIsSimulating(false);
+    }
   };
+
+  // Summarise backend status for bottom bar
+  const statusDot = serverStatus.ok === false
+    ? '#f87171'
+    : serverStatus.ngspice_available
+      ? '#6ee7b7'
+      : '#fbbf24';
+  const statusText = serverStatus.ok === null
+    ? 'Connecting…'
+    : serverStatus.ok === false
+      ? 'API offline'
+      : serverStatus.ngspice_available
+        ? 'Ready (ngspice)'
+        : 'Ready (synthetic)';
+
+  const bestEntry = optimResult?.history?.filter((e) => e.vref_V != null)
+    .sort((a, b) => Math.abs(a.vref_V - 1.2) - Math.abs(b.vref_V - 1.2))[0];
 
   return (
     <div style={S.appWrapper}>
@@ -699,10 +810,10 @@ export default function App() {
         {/* Sidebar */}
         <div style={S.sidebar}>
           <div style={S.sideSection}>Workflow</div>
-          {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-            <button key={id} style={S.navItem(activeTab === id)} onClick={() => setActiveTab(id)}>
-              <Icon size={15} />
-              {label}
+          {NAV_ITEMS.map((item) => (
+            <button key={item.id} style={S.navItem(activeTab === item.id)} onClick={() => setActiveTab(item.id)}>
+              <item.icon size={15} />
+              {item.label}
             </button>
           ))}
           <div style={{ marginTop: 'auto' }}>
@@ -718,6 +829,17 @@ export default function App() {
 
         {/* Main content */}
         <div style={S.main}>
+          {apiError && (
+            <div style={{
+              backgroundColor: '#7f1d1d', color: '#fca5a5',
+              borderRadius: '0.375rem', padding: '0.5rem 0.875rem',
+              marginBottom: '0.75rem', fontSize: '0.8rem',
+              display: 'flex', alignItems: 'center', gap: '0.5rem',
+            }}>
+              <AlertTriangle size={14} />
+              <span>API error: {apiError}</span>
+            </div>
+          )}
           {activeTab === 'optimization' && (
             <OptimizationTab
               isSimulating={isSimulating}
@@ -726,13 +848,16 @@ export default function App() {
               setSelectedCandidate={setSelectedCandidate}
               designValues={designValues}
               setDesignValues={setDesignValues}
+              candidates={liveCandidates}
+              convergenceData={liveConvergence}
+              optimResult={optimResult}
             />
           )}
           {activeTab === 'layout' && (
             <LayoutTab layer={layoutLayer} setLayer={setLayoutLayer} />
           )}
           {activeTab === 'verification' && <VerificationTab />}
-          {activeTab === 'logs' && <LogsTab />}
+          {activeTab === 'logs' && <LogsTab logLines={liveLogs} logRef={logRef} />}
         </div>
       </div>
 
@@ -740,15 +865,24 @@ export default function App() {
       <div style={S.bottomBar}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
           <span style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-            <div style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#6ee7b7' }} />
-            Ready
+            <div style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: statusDot }} />
+            {statusText}
           </span>
-          <span>ngspice 41 · Python 3.10</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <span>3/4 corners pass</span>
-          <span>Best TC: 12.4 ppm/C</span>
-          <span>iter 28/50</span>
+          {optimResult ? (
+            <>
+              <span>{optimResult.n_spec_pass}/{optimResult.n_simulations} spec-pass</span>
+              <span>Best Vref: {bestEntry ? (bestEntry.vref_V * 1000).toFixed(1) + ' mV' : '—'}</span>
+              <span>iter {optimResult.n_simulations}</span>
+            </>
+          ) : (
+            <>
+              <span>3/4 corners pass</span>
+              <span>Best TC: 12.4 ppm/C</span>
+              <span>iter 28/50</span>
+            </>
+          )}
         </div>
       </div>
     </div>

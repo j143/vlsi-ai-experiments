@@ -19,5 +19,9 @@ flake8>=6.0,<8
 # Visualization (optional but used in examples)
 matplotlib>=3.7,<4
 
+# Web API server (used by api/server.py to expose back-end to the React frontend)
+flask>=3.0,<4
+flask-cors>=4.0,<6
+
 # PyTorch is optional — install separately for layout model training
 # pip install torch  (CPU-only) or see https://pytorch.org/get-started/locally/
