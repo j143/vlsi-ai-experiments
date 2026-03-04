@@ -31,6 +31,7 @@ References
 [2] Snoek et al., "Practical Bayesian Optimization of ML algorithms," NeurIPS 2012.
 """
 
+import argparse
 import json
 import logging
 import time
@@ -335,3 +336,336 @@ class BayesianOptimizer:
         logger.debug("Iter %d [%s] vref=%.4f spec=%s", iteration, source,
                      vref or float("nan"), spec_pass)
         return entry
+
+
+# ---------------------------------------------------------------------------
+# Synthetic runner — analytical Brokaw approximation (no ngspice required)
+# ---------------------------------------------------------------------------
+
+class SyntheticBandgapRunner:
+    """Lightweight runner using the analytic Brokaw formula.
+
+    Replaces ngspice when it is not installed, so that the full BO pipeline
+    can be exercised without a real SPICE simulator.
+
+    Vref ≈ Vbe + (R1/R2) * VT * ln(N)
+
+    Notes
+    -----
+    - Results are physically plausible but NOT silicon-verified.
+    - A small amount of Gaussian noise is added to simulate process variation.
+    - Spec checks use the same thresholds as bandgap/specs.yaml.
+    """
+
+    def __init__(
+        self,
+        specs_file: Path | str = SPECS_FILE,
+        noise_std: float = 0.002,
+        seed: int = 0,
+    ) -> None:
+        with open(specs_file) as f:
+            self.specs = yaml.safe_load(f)
+        self.noise_std = noise_std
+        self._rng = np.random.default_rng(seed)
+
+    def run(self, params: dict[str, Any]) -> dict[str, Any]:
+        """Evaluate the analytic bandgap model at *params*."""
+        N = float(params.get("N", 8))
+        R1 = float(params.get("R1", 100e3))
+        R2 = float(params.get("R2", 10e3))
+
+        VT = 0.02585  # Thermal voltage at 300 K
+        Vbe = 0.650 + self._rng.normal(0, self.noise_std)
+        # Brokaw formula: Vref ≈ Vbe + (R1/R2) * VT * ln(N)
+        Vref = Vbe + (R1 / R2) * VT * np.log(max(N, 1.0))
+        Vref += self._rng.normal(0, self.noise_std)
+        iq_uA = Vref / R1 * 1e6
+
+        target = self.specs["vref"]["target_V"]
+        tol = self.specs["vref"]["tolerance_V"]
+        spec_vref = bool(abs(Vref - target) <= tol)
+        spec_iq = bool(iq_uA <= self.specs["quiescent_current"]["max_uA"])
+
+        return {
+            "params": params,
+            "vref_V": float(Vref),
+            "iq_uA": float(iq_uA),
+            "spec_checks": {"vref": spec_vref, "iq": spec_iq},
+            "raw_output": "",
+            "error": None,
+        }
+
+    def is_ngspice_available(self) -> bool:
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Plot helpers
+# ---------------------------------------------------------------------------
+
+def _plot_convergence(result: OptimizationResult, results_dir: Path) -> None:
+    """Plot best-so-far Vref error vs. BO iteration number."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    vref_target = None
+    errors: list[float] = []
+    best_so_far = float("inf")
+
+    # Read target from specs (if available), fall back to 1.2 V
+    try:
+        with open(SPECS_FILE) as f:
+            specs = yaml.safe_load(f)
+        vref_target = specs["vref"]["target_V"]
+        tol = specs["vref"]["tolerance_V"]
+    except Exception:
+        vref_target = 1.2
+        tol = 0.01
+
+    for entry in result.history:
+        v = entry.get("vref_V")
+        if v is not None:
+            err = abs(v - vref_target)
+            best_so_far = min(best_so_far, err)
+        errors.append(best_so_far if best_so_far < float("inf") else float("nan"))
+
+    iters = list(range(1, len(errors) + 1))
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(iters, errors, marker="o", markersize=3, linewidth=1.5, label="Best |Vref − target|")
+    ax.axhline(tol, color="red", linestyle="--", linewidth=1, label=f"Tolerance (±{tol*1000:.0f} mV)")
+    ax.set_xlabel("BO Iteration")
+    ax.set_ylabel("|Vref − target| [V]")
+    ax.set_title("Bayesian Optimization Convergence")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.tight_layout()
+
+    plot_path = results_dir / "bo_convergence.png"
+    plt.savefig(plot_path, dpi=150)
+    plt.close()
+    logger.info("Convergence plot saved to %s", plot_path)
+
+
+def _plot_comparison(summary: dict[str, Any], results_dir: Path) -> None:
+    """Bar chart comparing BO vs. brute-force sweep simulation counts."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    sweep = summary.get("sweep", {})
+    bo = summary.get("bayesian_optimization", {})
+
+    labels = ["Brute-force\nsweep", "Bayesian\noptimization"]
+    n_sims = [sweep.get("n_samples", 0), bo.get("n_simulations", 0)]
+    n_pass = [sweep.get("n_spec_pass", 0), bo.get("n_spec_pass", 0)]
+
+    x = range(len(labels))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    bars_total = ax.bar([i - width / 2 for i in x], n_sims, width,
+                        label="Total simulations", color="steelblue", alpha=0.8)
+    bars_pass = ax.bar([i + width / 2 for i in x], n_pass, width,
+                       label="Spec-pass count", color="seagreen", alpha=0.8)
+
+    ax.set_xticks(list(x))
+    ax.set_xticklabels(labels)
+    ax.set_ylabel("Count")
+    ax.set_title("Simulation Budget: Brute-Force vs. Bayesian Optimization")
+    ax.legend()
+
+    for bar in bars_total:
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                str(int(bar.get_height())), ha="center", va="bottom", fontsize=9)
+    for bar in bars_pass:
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.3,
+                str(int(bar.get_height())), ha="center", va="bottom", fontsize=9)
+
+    plt.tight_layout()
+    plot_path = results_dir / "exp01_comparison.png"
+    plt.savefig(plot_path, dpi=150)
+    plt.close()
+    logger.info("Comparison plot saved to %s", plot_path)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    """CLI entry point: run BO experiment and produce exp01_summary.json + plots.
+
+    Usage::
+
+        python -m ml.optimize [--budget 30] [--n-init 10] [--brute-force-n 50]
+                              [--results-dir results] [--seed 42]
+    """
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    parser = argparse.ArgumentParser(
+        description="Run Bayesian Optimization experiment (Exp 01)."
+    )
+    parser.add_argument("--budget", type=int, default=30,
+                        help="Maximum ngspice calls for the BO run.")
+    parser.add_argument("--n-init", type=int, default=10,
+                        help="LHS initialisation points before BO starts.")
+    parser.add_argument("--brute-force-n", type=int, default=50,
+                        help="Number of random samples for the brute-force baseline.")
+    parser.add_argument("--results-dir", default="results",
+                        help="Output directory for summary JSON and plots.")
+    parser.add_argument("--seed", type=int, default=42,
+                        help="Random seed for reproducibility.")
+    args = parser.parse_args()
+
+    results_dir = Path(args.results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # -----------------------------------------------------------------------
+    # 1. Create runner (real ngspice or analytic synthetic fallback)
+    # -----------------------------------------------------------------------
+    using_synthetic = False
+    try:
+        from bandgap.runner import BandgapRunner, _find_ngspice  # noqa: F401
+        _find_ngspice()
+        runner: Any = BandgapRunner()
+        logger.info("Using real ngspice runner.")
+    except FileNotFoundError:
+        runner = SyntheticBandgapRunner(specs_file=SPECS_FILE, seed=args.seed)
+        using_synthetic = True
+        logger.warning(
+            "ngspice not found — using analytical synthetic runner. "
+            "Results illustrate the BO algorithm; they are NOT silicon-verified."
+        )
+
+    # -----------------------------------------------------------------------
+    # 2. Bayesian Optimization run
+    # -----------------------------------------------------------------------
+    logger.info("Starting Bayesian Optimization (budget=%d, n_init=%d)…",
+                args.budget, args.n_init)
+    opt = BayesianOptimizer(
+        runner=runner,
+        budget=args.budget,
+        n_init=args.n_init,
+        specs_file=SPECS_FILE,
+        results_dir=results_dir,
+    )
+    bo_result = opt.run(seed=args.seed)
+
+    # -----------------------------------------------------------------------
+    # 3. Brute-force baseline sweep
+    # -----------------------------------------------------------------------
+    logger.info("Running brute-force baseline (%d random samples)…", args.brute_force_n)
+    rng = np.random.default_rng(args.seed + 1)
+    bf_samples = _make_lhs_samples(n_samples=args.brute_force_n, rng=rng)
+
+    import pandas as pd
+    bf_rows = []
+    for params in bf_samples:
+        sim = runner.run(params)
+        bf_rows.append({
+            **params,
+            "vref_V": sim.get("vref_V"),
+            "iq_uA": sim.get("iq_uA"),
+            "error": sim.get("error") or "",
+        })
+    bf_df = pd.DataFrame(bf_rows)
+
+    with open(SPECS_FILE) as f:
+        specs = yaml.safe_load(f)
+    vref_target = specs["vref"]["target_V"]
+    vref_tol = specs["vref"]["tolerance_V"]
+
+    bf_valid = bf_df["vref_V"].notna()
+    bf_pass_mask = bf_valid & (bf_df["vref_V"].sub(vref_target).abs() <= vref_tol)
+    bf_n_pass = int(bf_pass_mask.sum())
+    bf_pass_rate = bf_n_pass / args.brute_force_n
+
+    # Index (1-based) of first passing sample in random sweep order
+    passing_indices = bf_pass_mask[bf_pass_mask].index.tolist()
+    bf_first_pass_at = int(passing_indices[0]) + 1 if passing_indices else args.brute_force_n
+
+    # -----------------------------------------------------------------------
+    # 4. Load surrogate metrics (produced by ml.surrogate main)
+    # -----------------------------------------------------------------------
+    surrogate_metrics: dict[str, Any] = {}
+    surrogate_metrics_path = results_dir / "surrogate_metrics.json"
+    if surrogate_metrics_path.exists():
+        with open(surrogate_metrics_path) as f:
+            surrogate_metrics = json.load(f)
+        logger.info("Loaded surrogate metrics from %s", surrogate_metrics_path)
+
+    # -----------------------------------------------------------------------
+    # 5. Build and save exp01_summary.json
+    # -----------------------------------------------------------------------
+    simulation_reduction_pct = (
+        round(100.0 * (1.0 - bo_result.n_simulations / args.brute_force_n), 1)
+        if args.brute_force_n > 0 else 0.0
+    )
+
+    summary: dict[str, Any] = {
+        "experiment": "exp01",
+        "description": "Bandgap surrogate vs. brute-force sweep",
+        "timestamp": datetime.now().isoformat(),
+        "using_synthetic_runner": using_synthetic,
+        "sweep": {
+            "n_samples": args.brute_force_n,
+            "n_valid": int(bf_valid.sum()),
+            "n_spec_pass": bf_n_pass,
+            "spec_pass_rate": round(bf_pass_rate, 4),
+            "first_pass_at_sim": bf_first_pass_at,
+        },
+        "bayesian_optimization": {
+            "budget": args.budget,
+            "n_init": args.n_init,
+            "n_simulations": bo_result.n_simulations,
+            "n_spec_pass": bo_result.n_spec_pass,
+            "spec_pass_rate": round(bo_result.spec_pass_rate(), 4),
+            "best_params": bo_result.best_params,
+            "best_vref_V": bo_result.best_vref_V,
+        },
+        "surrogate": surrogate_metrics,
+        "comparison": {
+            "brute_force_simulations": args.brute_force_n,
+            "bo_simulations": bo_result.n_simulations,
+            "simulation_reduction_pct": simulation_reduction_pct,
+            "bo_spec_pass_rate": round(bo_result.spec_pass_rate(), 4),
+            "brute_force_spec_pass_rate": round(bf_pass_rate, 4),
+        },
+    }
+
+    summary_path = results_dir / "exp01_summary.json"
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    logger.info("Summary saved to %s", summary_path)
+
+    # -----------------------------------------------------------------------
+    # 6. Plots
+    # -----------------------------------------------------------------------
+    _plot_convergence(bo_result, results_dir)
+    _plot_comparison(summary, results_dir)
+
+    # -----------------------------------------------------------------------
+    # 7. Console summary
+    # -----------------------------------------------------------------------
+    print(f"\n{'='*60}")
+    print("Experiment 01 — Bandgap: Surrogate vs. Brute-Force Sweep")
+    print(f"{'='*60}")
+    if using_synthetic:
+        print("  [NOTE] ngspice not installed — results use analytic model.")
+    print(f"  Brute-force sweep : {args.brute_force_n} sims, "
+          f"{bf_n_pass} spec-pass ({100*bf_pass_rate:.0f}%)")
+    print(f"  Bayesian opt      : {bo_result.n_simulations} sims, "
+          f"{bo_result.n_spec_pass} spec-pass "
+          f"({100*bo_result.spec_pass_rate():.0f}%)")
+    print(f"  Simulation savings: {simulation_reduction_pct:.0f}%")
+    if bo_result.best_vref_V is not None:
+        print(f"  Best Vref         : {bo_result.best_vref_V:.4f} V")
+    print(f"  Output JSON       : {summary_path}")
+    print(f"{'='*60}\n")
+
+
+if __name__ == "__main__":
+    main()
+
