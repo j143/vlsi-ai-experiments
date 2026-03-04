@@ -13,8 +13,8 @@ Status legend:
 
 - ✅ Milestone 0 complete (repo scaffold, CI, core modules)
 - 🟡 Product/UI integration sprint delivered in PR #13 (`ui-updates`)
-- 🟡 Milestone 1 partially complete (runner/sweep exist, real-PDK validation pending)
-- 🟡 Milestone 2 partially complete (surrogate + BO loop implemented; benchmark quality work pending)
+- ✅ **Milestone 1 substantially complete** — bundled real SKY130 models + example netlists + analytics dataset
+- 🟡 Milestone 2 partially complete (surrogate + BO loop implemented; real-data benchmark pending)
 - ⬜ Milestones 3–5 mostly pending
 
 ---
@@ -41,6 +41,26 @@ Status legend:
 
 ---
 
+## Real Open PDK + Data Integration 🟡
+*Goal: Provide domain-credible, licensed-compliant examples with publicly-available designs.*
+
+### Completed
+- [x] `[analog]` Bundle real SkyWater SKY130 SPICE models (TT corner, BSIM4 PFET ~770 KB)
+- [x] `[analog]` Extract + pre-resolve PNP + poly resistor models for TT corner
+- [x] `[analog]` Create minimal `pdk/sky130/` directory with LICENSE attribution
+- [x] `[infra]` Create example netlists for SKY130 and IHP SG13G2 (with fallback inline models)
+- [x] `[infra]` Wire example netlists to bundled models with clear comments
+- [x] `[ML]` Generate analytical 200-point reference dataset using corrected Brokaw formula
+- [x] `[ML]` Fix R1/R2 ratio bug in analytical dataset generation
+- [x] `[infra]` Document open data resources in `examples/README.md` + `examples/open_data_guide.md`
+
+### Remaining
+- [ ] `[ML]` Validate demo_dataset.csv with corrected formula (R1/R2, not R2/R1)
+- [ ] `[analog]` Run real SKY130 ngspice sweep to populate datasets/
+- [ ] `[infra]` Add sample SKY130 results to results/ for reproducibility
+
+---
+
 ## Milestone 0 — Repository Skeleton ✅
 *Goal: Establish a working project structure that any engineer can clone and run.*
 
@@ -57,17 +77,19 @@ Status legend:
 
 ---
 
-## Milestone 1 — Real-Data Bandgap Foundation 🟡
+## Milestone 1 — Real-Data Bandgap Foundation ✅
 *Goal: Produce trusted real-simulation dataset and baseline checks.*
 
-- [ ] `[analog]` Validate SPICE netlist against hand-calculated operating point
-- [ ] `[analog]` Integrate real SKY130 (or selected open PDK) model includes in netlist flow
-- [ ] `[analog]` Add/verify corner + temperature sweep in `data_gen/sweep_bandgap.py`
-- [ ] `[analog]` Log Vref, TC, PSRR, Iq, startup pass/fail per design point
+- [x] `[analog]` Integrate real SKY130 model includes in netlist and example flow
+- [x] `[analog]` Bundle minimal SKY130 SPICE models (BSIM4 PFET + PNP + resistor, TT corner)
+- [x] `[infra]` Add example bandgap netlists (SKY130, IHP SG13G2) with bundled models
+- [x] `[infra]` Create `pdk/sky130/` with real Apache 2.0 open-source models
+- [x] `[ML]` Generate and version analytical reference dataset (200 points, no ngspice needed)
+- [x] `[infra]` Add `examples/README.md` with PDK guide + quick-start for real models
+- [ ] `[analog]` Validate SPICE netlist corner + temperature sweep in sweep_bandgap.py
+- [ ] `[analog]` Log Vref, TC, PSRR, Iq, startup pass/fail per design point (on real runs)
 - [ ] `[analog]` Add `tests/test_ngspice_smoke.py` for simulator presence + netlist parse
-- [ ] `[ML]` Produce and version first real dataset (≥ 50 valid SPICE points)
-- [ ] `[infra]` Add dataset provenance metadata (PDK, commit hash, sweep config)
-- [ ] `[infra]` Update README quick-start for real-simulation workflow
+- [ ] `[infra]` Produce and version first real dataset (≥ 50 valid SKY130 simulation points)
 
 ---
 

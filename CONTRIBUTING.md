@@ -115,6 +115,29 @@ download or generation instructions.
 
 ---
 
+## Open PDK Model Data
+
+This repo bundles real, license-compliant SPICE models from open-source PDKs in `pdk/`.
+
+### Adding a New PDK
+1. Choose an **open-source, Apache 2.0 or MIT licensed** PDK (e.g., SkyWater SKY130, IHP SG13G2).
+2. Extract only the **minimal model files needed** for your design (one corner, key devices).
+3. Create a subdirectory: `pdk/<pdk_name>/`.
+4. Include the **LICENSE file** from the original PDK repo for attribution.
+5. Create a `README.md` documenting:
+   - Which devices are included and why.
+   - License and source URL.
+   - How to use in SPICE netlists.
+6. Create an example netlist in `examples/<pdk_name>_bandgap.sp` that references the bundled models.
+7. Document in `examples/README.md` and `examples/open_data_guide.md`.
+
+### Size Limits for PDK Models
+- Bundled SPICE models: **< 1 MB total per PDK** (pick one corner, key devices only).
+- Larger models (GDS2, LEF/DEF): not committed; document download URL in `pdk/<pdk_name>/README.md`.
+- If model files exceed 1 MB, use a submodule or `.gitignore` + regeneration script.
+
+---
+
 ## Testing Requirements
 
 - Every new Python module must have at least **one test file** in `tests/`.

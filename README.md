@@ -48,24 +48,41 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Configure technology (required for real simulations)
-Open `config/tech_placeholder.yaml` and fill in every `TODO(human):` entry
-with values from your target PDK (e.g., SkyWater SKY130, GF180MCU).
+### 2. Run with bundled SKY130 models (recommended)
+This repo includes **real open-source SKY130 SPICE models** in `pdk/sky130/`.
+You can immediately run examples without installing a PDK:
 
-### 3. Run tests (no ngspice required)
+```bash
+# Instant: run analytics + ML pipeline
+python examples/generate_reference_dataset.py
+python examples/run_full_pipeline.py
+
+# With ngspice installed: real simulation
+sudo apt-get install ngspice
+ngspice examples/sky130_bandgap.sp
+```
+
+See [examples/README.md](examples/README.md) for full details and other PDKs.
+
+### 3. (Optional) Configure other PDKs
+For other processes (GF180MCU, IHP SG13G2, custom), edit `config/tech_placeholder.yaml`
+and replace every `TODO(human):` entry with values from your target PDK.
+
+### 4. Run tests (no ngspice required)
 ```bash
 pytest tests/ -v -m "not requires_ngspice"
 ```
 Expected output: all tests pass in ~10 seconds.
 
-### 4. Generate a dataset (requires ngspice)
+### 5. Generate a dataset (requires ngspice + your own PDK)
 ```bash
-# Install ngspice first:  sudo apt-get install ngspice
+# Install ngspice:  sudo apt-get install ngspice
 python data_gen/sweep_bandgap.py --mode lhs --n-samples 50 --out datasets/
 ```
 This writes `datasets/bandgap_sweep_<timestamp>.csv`.
+Or use the pre-generated analytics dataset from `examples/demo_dataset.csv`.
 
-### 5. Train a surrogate model
+### 6. Train a surrogate model
 ```python
 import pandas as pd
 from ml.surrogate import GaussianProcessSurrogate, evaluate_surrogate
@@ -81,7 +98,7 @@ metrics = evaluate_surrogate(model, X[40:], y[40:])
 print(metrics)
 ```
 
-### 6. Run Bayesian optimization
+### 7. Run Bayesian optimization
 ```python
 from bandgap.runner import BandgapRunner
 from ml.optimize import BayesianOptimizer
@@ -108,24 +125,38 @@ print(f"Simulations used: {result.n_simulations}, Spec pass rate: {result.spec_p
 
 ---
 
-## Technology / PDK Setup
+## Real Open PDK Support
 
-This repo ships with **placeholder** PDK values — it will not produce correct
-simulation results until you replace them with values from a real PDK.
+This repo bundles **real SPICE models** from open-source PDKs to support reproducible
+simulation without requiring PDK installation.
 
-Steps:
-1. Choose an open-source PDK (e.g., [SkyWater SKY130](https://github.com/google/skywater-pdk)).
-2. Edit `config/tech_placeholder.yaml`: replace every `TODO(human):` line.
-3. Edit `bandgap/netlists/bandgap_simple.sp`: replace `.model` lines with a
-   `.lib` include pointing to your PDK model file.
-4. Run `pytest tests/ -v` to confirm no regressions.
-5. Run a single simulation to validate the netlist:
-   ```bash
-   python -c "
-   from bandgap.runner import BandgapRunner
-   print(BandgapRunner().run({'N':8,'R1':100e3,'R2':10e3,'W_P':4e-6,'L_P':1e-6}))
-   "
-   ```
+### Bundled: SkyWater SKY130 (Apache 2.0)
+- Location: `pdk/sky130/` — minimal TT-corner extraction (~770 KB BSIM4 PFET + PNP + resistor models)
+- Example netlist: `examples/sky130_bandgap.sp` — ready to run with ngspice
+- See [pdk/sky130/README.md](pdk/sky130/README.md) for model inventory
+
+### Available: IHP SG13G2, GF180MCU, others
+For other PDKs, see [examples/README.md](examples/README.md) for installation and usage.
+Each includes a reference bandgap netlist and an `open_data_guide.md` for setup.
+
+---
+
+## Technology / PDK Configuration
+
+**For SKY130 (recommended for quick start):**
+- Models are bundled and ready to use.
+- No additional configuration needed.
+
+**For other PDKs or custom processes:**
+1. Follow the installation guide in [examples/open_data_guide.md](examples/open_data_guide.md).
+2. Edit `config/tech_placeholder.yaml` to add process parameters.
+3. Update your netlist to `.include` the PDK model library.
+
+For examples of pre-wired netlists, see `examples/`.
+
+---
+
+## Old-style: Tech Placeholder (deprecated but still supported)
 
 ---
 
