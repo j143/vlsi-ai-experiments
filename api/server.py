@@ -5,9 +5,11 @@ Exposes the bandgap simulation and optimization back-end to the React frontend.
 
 Endpoints
 ---------
-GET  /api/status          Returns server health and ngspice availability.
-POST /api/simulate        Runs a single ngspice simulation for given params.
-POST /api/optimize        Runs the Bayesian optimization loop and returns results.
+GET  /api/status           Returns server health and ngspice availability.
+POST /api/simulate         Runs a single ngspice simulation for given params.
+POST /api/optimize         Runs the Bayesian optimization loop and returns results.
+GET  /api/optimize/stream  Streams optimizer progress via SSE.
+GET  /api/layout/preview   Returns synthetic layout patch + DRC summary.
 
 Usage::
 
@@ -27,6 +29,7 @@ import threading
 from queue import Queue
 from pathlib import Path
 
+import numpy as np
 from flask import Flask, Response, request
 from flask_cors import CORS
 
@@ -35,6 +38,8 @@ _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
 from bandgap.runner import BandgapRunner  # noqa: E402
+from layout.data_stub import LAYER_MAP, PatchConfig, generate_synthetic_patch  # noqa: E402
+from layout.evaluate import run_drc  # noqa: E402
 from ml.optimize import SyntheticBandgapRunner  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
@@ -342,6 +347,33 @@ def optimize_stream():
             "Connection": "keep-alive",
             "X-Accel-Buffering": "no",
         },
+    )
+
+
+@app.get("/api/layout/preview")
+def layout_preview():
+    """Return a synthetic layout patch for UI visualization.
+
+    Query params:
+      - seed (int, optional): random seed for deterministic preview.
+      - patch_size (int, optional): square patch dimension, default 32.
+    """
+    seed = int(request.args.get("seed", 42))
+    patch_size = max(16, min(int(request.args.get("patch_size", 32)), 64))
+
+    cfg = PatchConfig(patch_size=patch_size)
+    rng = np.random.default_rng(seed)
+    patch = generate_synthetic_patch(cfg, rng)
+    drc = run_drc(np.expand_dims(patch, axis=0))
+
+    return _safe_json(
+        {
+            "patch_size": patch_size,
+            "n_layers": int(patch.shape[0]),
+            "layer_map": {str(k): v for k, v in LAYER_MAP.items()},
+            "patch": patch.tolist(),
+            "drc": drc,
+        }
     )
 
 
