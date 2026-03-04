@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from ml.surrogate import (  # noqa: E402
     GaussianProcessSurrogate,
     RandomForestSurrogate,
+    _generate_synthetic_data,
     evaluate_surrogate,
 )
 
@@ -149,3 +150,35 @@ class TestEvaluateSurrogate:
         model.fit(X[:25], y[:25])
         metrics = evaluate_surrogate(model, X[25:], y[25:])
         assert 0.0 <= metrics["within_1sigma_frac"] <= 1.0
+
+
+class TestGenerateSyntheticData:
+    def test_returns_dataframe_with_expected_columns(self):
+        df = _generate_synthetic_data(n=20)
+        for col in ["N", "R1", "R2", "W_P", "L_P", "vref_V", "iq_uA", "error"]:
+            assert col in df.columns, f"Missing column: {col}"
+
+    def test_correct_row_count(self):
+        df = _generate_synthetic_data(n=30)
+        assert len(df) == 30
+
+    def test_vref_plausible_range(self):
+        """Vref should be physically plausible (0.5 V – 3.5 V)."""
+        df = _generate_synthetic_data(n=50)
+        assert (df["vref_V"] > 0.5).all(), "Some Vref values are too low"
+        assert (df["vref_V"] < 3.5).all(), "Some Vref values are too high"
+
+    def test_target_region_exists(self):
+        """At least some samples should be close to the 1.2 V target."""
+        df = _generate_synthetic_data(n=200)
+        near_target = ((df["vref_V"] - 1.2).abs() < 0.1).sum()
+        assert near_target > 0, "No samples found near the 1.2 V target"
+
+    def test_reproducible_with_same_seed(self):
+        df1 = _generate_synthetic_data(n=10, seed=99)
+        df2 = _generate_synthetic_data(n=10, seed=99)
+        np.testing.assert_array_equal(df1["vref_V"].values, df2["vref_V"].values)
+
+    def test_no_errors(self):
+        df = _generate_synthetic_data(n=10)
+        assert (df["error"] == "").all()

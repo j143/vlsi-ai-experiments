@@ -34,18 +34,24 @@ Design decision:
     For larger datasets, switch to RandomForestSurrogate or a neural network.
 """
 
+import argparse
+import json
 import logging
 import pickle
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import ConstantKernel, Matern
 from sklearn.preprocessing import StandardScaler
 
 logger = logging.getLogger(__name__)
+
+# Feature columns expected in the sweep CSV
+FEATURES = ["N", "R1", "R2", "W_P", "L_P"]
 
 
 class _BaseSurrogate:
@@ -309,3 +315,190 @@ def evaluate_surrogate(
         r2, rmse, max_err, mean_std, 100 * within_1sigma,
     )
     return metrics
+
+
+def _generate_synthetic_data(n: int = 100, seed: int = 42) -> pd.DataFrame:
+    """Generate synthetic bandgap data using the analytical Brokaw formula.
+
+    Used as a fallback when no ngspice sweep CSV is available.
+
+    Vref ≈ Vbe + (R1/R2) * VT * ln(N)   (simplified Brokaw equation)
+
+    Parameters
+    ----------
+    n:
+        Number of samples to generate.
+    seed:
+        Random seed for reproducibility.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: N, R1, R2, W_P, L_P, vref_V, iq_uA, error.
+    """
+    import sys
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    from data_gen.sweep_bandgap import _make_lhs_samples  # noqa: E402
+
+    rng = np.random.default_rng(seed)
+    samples = _make_lhs_samples(n_samples=n, rng=rng)
+
+    rows = []
+    for p in samples:
+        VT = 0.02585  # Thermal voltage at 300 K [V]
+        Vbe = 0.650 + rng.normal(0, 0.002)  # ±2 mV process variation
+        # Brokaw formula: Vref ≈ Vbe + (R1/R2) * VT * ln(N)
+        Vref = Vbe + (p["R1"] / p["R2"]) * VT * float(np.log(p["N"]))
+        Vref += rng.normal(0, 0.002)  # ±2 mV simulation noise
+        iq_uA = Vref / p["R1"] * 1e6
+        rows.append({**p, "vref_V": float(Vref), "iq_uA": float(iq_uA), "error": ""})
+
+    return pd.DataFrame(rows)
+
+
+def main() -> None:
+    """CLI entry point: train surrogate on sweep data, save checkpoint and eval plots.
+
+    Usage::
+
+        python -m ml.surrogate [--datasets-dir datasets] [--results-dir results]
+                               [--model gp|rf] [--target vref_V]
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+    parser = argparse.ArgumentParser(
+        description="Train surrogate model on bandgap sweep data."
+    )
+    parser.add_argument("--datasets-dir", default="datasets",
+                        help="Directory containing bandgap_sweep_*.csv files.")
+    parser.add_argument("--results-dir", default="results",
+                        help="Output directory for plots and metrics JSON.")
+    parser.add_argument("--checkpoint-dir", default="ml/checkpoints",
+                        help="Directory to save the fitted model checkpoint.")
+    parser.add_argument("--model", choices=["gp", "rf"], default="gp",
+                        help="Surrogate model type: 'gp' (Gaussian Process) or 'rf' (Random Forest).")
+    parser.add_argument("--target", default="vref_V",
+                        help="Target column to model (must exist in the sweep CSV).")
+    parser.add_argument("--n-synthetic", type=int, default=200,
+                        help="Synthetic samples to use when no valid sweep data is found.")
+    args = parser.parse_args()
+
+    # -----------------------------------------------------------------------
+    # 1. Load sweep data (or fall back to synthetic)
+    # -----------------------------------------------------------------------
+    datasets_dir = Path(args.datasets_dir)
+    csv_files = sorted(datasets_dir.glob("bandgap_sweep_*.csv")) if datasets_dir.exists() else []
+
+    df_valid = pd.DataFrame()
+    if csv_files:
+        df = pd.read_csv(csv_files[-1])
+        if args.target in df.columns:
+            valid_mask = (df["error"].isna() | (df["error"] == "")) & df[args.target].notna()
+            df_valid = df[valid_mask]
+            logger.info("Loaded %d valid rows from %s", len(df_valid), csv_files[-1])
+        else:
+            logger.warning("Target column '%s' not found in CSV.", args.target)
+
+    MIN_ROWS = 10
+    if len(df_valid) < MIN_ROWS:
+        logger.info(
+            "Fewer than %d valid rows available (%d). "
+            "Generating %d synthetic samples (analytical Brokaw model).",
+            MIN_ROWS, len(df_valid), args.n_synthetic,
+        )
+        df_valid = _generate_synthetic_data(n=args.n_synthetic)
+
+    # -----------------------------------------------------------------------
+    # 2. Build feature / target arrays
+    # -----------------------------------------------------------------------
+    X = df_valid[FEATURES].values
+    y = df_valid[args.target].values
+
+    n = len(X)
+    n_train = max(2, int(0.8 * n))
+    idx = np.random.default_rng(42).permutation(n)
+    X_train, X_test = X[idx[:n_train]], X[idx[n_train:]]
+    y_train, y_test = y[idx[:n_train]], y[idx[n_train:]]
+
+    # -----------------------------------------------------------------------
+    # 3. Train
+    # -----------------------------------------------------------------------
+    if args.model == "gp":
+        model: _BaseSurrogate = GaussianProcessSurrogate(n_restarts=5)
+    else:
+        model = RandomForestSurrogate(n_estimators=100)
+
+    logger.info("Training %s surrogate on %d samples…", args.model.upper(), n_train)
+    model.fit(X_train, y_train)
+
+    # -----------------------------------------------------------------------
+    # 4. Evaluate
+    # -----------------------------------------------------------------------
+    metrics: dict[str, Any] = {}
+    if len(X_test) >= 2:
+        metrics = evaluate_surrogate(model, X_test, y_test)
+
+    # -----------------------------------------------------------------------
+    # 5. Save checkpoint
+    # -----------------------------------------------------------------------
+    ckpt_path = Path(args.checkpoint_dir) / f"{args.model}_{args.target}.pkl"
+    model.save(ckpt_path)
+
+    # -----------------------------------------------------------------------
+    # 6. Save metrics JSON
+    # -----------------------------------------------------------------------
+    results_dir = Path(args.results_dir)
+    results_dir.mkdir(parents=True, exist_ok=True)
+    metrics_payload = {
+        "model": args.model,
+        "target": args.target,
+        "n_train": n_train,
+        "n_test": len(X_test),
+        **metrics,
+    }
+    metrics_path = results_dir / "surrogate_metrics.json"
+    with open(metrics_path, "w") as f:
+        json.dump(metrics_payload, f, indent=2)
+    logger.info("Surrogate metrics saved to %s", metrics_path)
+
+    # -----------------------------------------------------------------------
+    # 7. Plots
+    # -----------------------------------------------------------------------
+    if len(X_test) >= 2:
+        mean, std = model.predict_with_uncertainty(X_test)
+
+        fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+        ax = axes[0]
+        ax.scatter(y_test, mean, alpha=0.7, edgecolors="k", linewidths=0.5)
+        lo = min(float(y_test.min()), float(mean.min()))
+        hi = max(float(y_test.max()), float(mean.max()))
+        ax.plot([lo, hi], [lo, hi], "r--", label="ideal")
+        r2_val = metrics.get("r2", float("nan"))
+        ax.set_xlabel(f"Actual {args.target}")
+        ax.set_ylabel(f"Predicted {args.target}")
+        ax.set_title(f"Surrogate ({args.model.upper()}) — R²={r2_val:.3f}")
+        ax.legend()
+
+        ax = axes[1]
+        ax.hist(std, bins=20, edgecolor="k")
+        ax.set_xlabel("Predicted uncertainty (σ)")
+        ax.set_ylabel("Count")
+        ax.set_title("Uncertainty distribution")
+
+        plt.tight_layout()
+        plot_path = results_dir / "surrogate_eval.png"
+        plt.savefig(plot_path, dpi=150)
+        plt.close()
+        logger.info("Surrogate eval plot saved to %s", plot_path)
+
+    logger.info("Done. Checkpoint: %s  Metrics: %s", ckpt_path, metrics_path)
+
+
+if __name__ == "__main__":
+    main()
+
