@@ -322,7 +322,12 @@ def _generate_synthetic_data(n: int = 100, seed: int = 42) -> pd.DataFrame:
 
     Used as a fallback when no ngspice sweep CSV is available.
 
-    Vref ≈ Vbe + (R1/R2) * VT * ln(N)   (simplified Brokaw equation)
+    Corrected Brokaw equation (common-base topology)::
+
+        Vref ≈ Vbe + 2·(R2/R1)·VT·ln(N)
+
+    where R1 is the PTAT resistor between emitters and R2 is the
+    emitter-to-GND resistor (carries both emitter currents = 2·I_PTAT).
 
     Parameters
     ----------
@@ -347,10 +352,11 @@ def _generate_synthetic_data(n: int = 100, seed: int = 42) -> pd.DataFrame:
     for p in samples:
         VT = 0.02585  # Thermal voltage at 300 K [V]
         Vbe = 0.650 + rng.normal(0, 0.002)  # ±2 mV process variation
-        # Brokaw formula: Vref ≈ Vbe + (R1/R2) * VT * ln(N)
-        Vref = Vbe + (p["R1"] / p["R2"]) * VT * float(np.log(p["N"]))
+        # Corrected Brokaw formula: Vref ≈ Vbe + 2·(R2/R1)·VT·ln(N)
+        Vref = Vbe + 2.0 * (p["R2"] / p["R1"]) * VT * float(np.log(p["N"]))
         Vref += rng.normal(0, 0.002)  # ±2 mV simulation noise
-        iq_uA = Vref / p["R1"] * 1e6
+        # Iq = 2·I_PTAT = 2·VT·ln(N)/R1
+        iq_uA = 2.0 * VT * float(np.log(p["N"])) / p["R1"] * 1e6
         rows.append({**p, "vref_V": float(Vref), "iq_uA": float(iq_uA), "error": ""})
 
     return pd.DataFrame(rows)

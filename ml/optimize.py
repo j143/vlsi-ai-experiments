@@ -381,7 +381,13 @@ class SyntheticBandgapRunner:
     Replaces ngspice when it is not installed, so that the full BO pipeline
     can be exercised without a real SPICE simulator.
 
-    Vref ≈ Vbe + (R1/R2) * VT * ln(N)
+    Corrected Brokaw formula (common-base topology)::
+
+        I_PTAT = VT · ln(N) / R1
+        Vref   = Vbe + 2 · (R2/R1) · VT · ln(N)
+
+    where R1 is the PTAT resistor between emitters and R2 is the
+    emitter-to-GND resistor (carries 2·I_PTAT).
 
     Notes
     -----
@@ -402,17 +408,23 @@ class SyntheticBandgapRunner:
         self._rng = np.random.default_rng(seed)
 
     def run(self, params: dict[str, Any]) -> dict[str, Any]:
-        """Evaluate the analytic bandgap model at *params*."""
-        N = float(params.get("N", 8))
-        R1 = float(params.get("R1", 100e3))
-        R2 = float(params.get("R2", 10e3))
+        """Evaluate the analytic bandgap model at *params*.
 
-        VT = 0.02585  # Thermal voltage at 300 K
+        Default parameter values match the corrected netlist defaults:
+        R1=20 kΩ (PTAT resistor), R2=100 kΩ (emitter-to-GND resistor).
+        """
+        N = float(params.get("N", 8))
+        R1 = float(params.get("R1", 20e3))   # PTAT resistor between emitters
+        R2 = float(params.get("R2", 100e3))  # emitter-to-GND resistor
+
+        VT = 0.02585  # Thermal voltage at 300 K [V]
         Vbe = 0.650 + self._rng.normal(0, self.noise_std)
-        # Brokaw formula: Vref ≈ Vbe + (R1/R2) * VT * ln(N)
-        Vref = Vbe + (R1 / R2) * VT * np.log(max(N, 1.0))
+        # Corrected Brokaw formula: Vref ≈ Vbe + 2·(R2/R1)·VT·ln(N)
+        # Both emitter currents (IE1 + I_PTAT = 2·I) flow through R2.
+        Vref = Vbe + 2.0 * (R2 / R1) * VT * np.log(max(N, 1.0))
         Vref += self._rng.normal(0, self.noise_std)
-        iq_uA = Vref / R1 * 1e6
+        # Quiescent current: Iq = 2 · I_PTAT = 2 · VT · ln(N) / R1
+        iq_uA = 2.0 * VT * np.log(max(N, 1.0)) / R1 * 1e6
 
         target = self.specs["vref"]["target_V"]
         tol = self.specs["vref"]["tolerance_V"]

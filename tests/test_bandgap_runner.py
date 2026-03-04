@@ -21,7 +21,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from bandgap.runner import (  # noqa: E402
     BandgapRunner,
+    _check_sanity,
     _check_specs,
+    _compute_tc,
+    _parse_meas_output,
     _parse_op_output,
     _render_netlist,
     NETLIST_TEMPLATE,
@@ -176,7 +179,7 @@ class TestBandgapRunner:
     def test_run_returns_dict_with_expected_keys(self):
         """Integration test — only runs when ngspice is installed."""
         runner = BandgapRunner()
-        params = {"N": 8, "R1": 100e3, "R2": 10e3, "W_P": 4e-6, "L_P": 1e-6}
+        params = {"N": 8, "R1": 20e3, "R2": 100e3, "W_P": 10e-6, "L_P": 2e-6}
         result = runner.run(params)
         expected_keys = {"params", "vref_V", "iq_uA", "spec_checks", "raw_output", "error"}
         assert expected_keys.issubset(result.keys())
@@ -185,7 +188,117 @@ class TestBandgapRunner:
         runner = BandgapRunner()
         with patch("bandgap.runner.shutil.which", return_value=None):
             with patch.dict("os.environ", {}, clear=True):
-                result = runner.run({"N": 8, "R1": 100e3, "R2": 10e3})
+                result = runner.run({"N": 8, "R1": 20e3, "R2": 100e3})
         assert result["error"] is not None
         assert "ngspice" in result["error"].lower()
         assert result["vref_V"] is None
+
+    def test_run_result_has_sanity_checks_key(self):
+        """run() always returns a sanity_checks dict even without ngspice."""
+        runner = BandgapRunner()
+        with patch("bandgap.runner.shutil.which", return_value=None):
+            with patch.dict("os.environ", {}, clear=True):
+                result = runner.run({"N": 8, "R1": 20e3, "R2": 100e3})
+        assert "sanity_checks" in result
+        assert isinstance(result["sanity_checks"], dict)
+
+
+class TestParseMeasOutput:
+    """Tests for _parse_meas_output()."""
+
+    def test_parses_named_measurement(self):
+        output = "vref_tnom           =  1.20000e+00 at temp =  2.70000e+01\n"
+        results = _parse_meas_output(output)
+        assert pytest.approx(results["vref_tnom"], rel=1e-4) == 1.20
+
+    def test_parses_max_and_min(self):
+        output = (
+            "vref_max            =  1.20300e+00 at temp =  1.25000e+02\n"
+            "vref_min            =  1.19600e+00 at temp = -4.00000e+01\n"
+        )
+        results = _parse_meas_output(output)
+        assert pytest.approx(results["vref_max"], rel=1e-4) == 1.203
+        assert pytest.approx(results["vref_min"], rel=1e-4) == 1.196
+
+    def test_empty_output_returns_empty_dict(self):
+        assert _parse_meas_output("") == {}
+
+    def test_handles_negative_measurement_value(self):
+        output = "some_meas = -3.5e-02\n"
+        results = _parse_meas_output(output)
+        assert pytest.approx(results["some_meas"]) == -0.035
+
+
+class TestComputeTC:
+    """Tests for _compute_tc()."""
+
+    def test_zero_tc_for_flat_vref(self):
+        tc = _compute_tc(1.20, 1.20, 1.20, -40, 125)
+        assert tc == 0.0
+
+    def test_positive_tc(self):
+        # Vref_max=1.2036, Vref_min=1.197 over 165 °C → TC = (1.2036-1.197)/(1.200*165)*1e6
+        # = 0.0066/198 * 1e6 ≈ 33.3 ppm/°C
+        tc = _compute_tc(1.197, 1.2036, 1.200, -40, 125)
+        assert pytest.approx(tc, rel=0.01) == 33.33
+
+    def test_zero_delta_t_returns_zero(self):
+        tc = _compute_tc(1.19, 1.21, 1.20, 27, 27)
+        assert tc == 0.0
+
+    def test_zero_vref_nom_returns_zero(self):
+        tc = _compute_tc(0.0, 0.1, 0.0, -40, 125)
+        assert tc == 0.0
+
+
+class TestCheckSanity:
+    """Tests for _check_sanity()."""
+
+    def _make_specs(self):
+        return {
+            "sanity_checks": {
+                "min_headroom_V": 0.1,
+                "min_ptat_swing_mV": 40,
+            }
+        }
+
+    def test_all_pass_for_healthy_operating_point(self):
+        # VCE(Q1)=0.7V, VCE(Q2)=0.65V, PTAT swing=0.054V (for N=8)
+        op = {"v(vb)": 1.2, "v(vc1)": 1.15, "v(ve1)": 0.50, "v(ve2)": 0.554}
+        checks = _check_sanity(op, self._make_specs())
+        assert checks.get("headroom_q1") is True
+        assert checks.get("headroom_q2") is True
+        assert checks.get("ptat_swing") is True
+
+    def test_headroom_q1_fail(self):
+        op = {"v(vb)": 0.55, "v(vc1)": 1.15, "v(ve1)": 0.50, "v(ve2)": 0.554}
+        checks = _check_sanity(op, self._make_specs())
+        assert checks.get("headroom_q1") is False
+
+    def test_ptat_swing_fail(self):
+        # PTAT swing = 0.020 V < 40 mV
+        op = {"v(vb)": 1.2, "v(vc1)": 1.15, "v(ve1)": 0.50, "v(ve2)": 0.520}
+        checks = _check_sanity(op, self._make_specs())
+        assert checks.get("ptat_swing") is False
+
+    def test_missing_nodes_not_reported(self):
+        """If node voltages are absent, no check is added (skipped, not failed)."""
+        checks = _check_sanity({}, self._make_specs())
+        assert "headroom_q1" not in checks
+        assert "ptat_swing" not in checks
+
+    def test_sanity_propagated_into_spec_checks(self):
+        """_check_specs should forward sanity_checks items with sanity_ prefix."""
+        specs = {
+            "vref": {"target_V": 1.2, "tolerance_V": 0.01, "measurement_node": "VOUT"},
+            "temperature_coefficient": {"max_ppm_C": 30},
+            "quiescent_current": {"max_uA": 50},
+            "sanity_checks": {"min_headroom_V": 0.1, "min_ptat_swing_mV": 40},
+        }
+        metrics = {
+            "vref_V": 1.2, "tc_ppm_C": None, "iq_uA": 5.0,
+            "sanity_checks": {"headroom_q1": True, "ptat_swing": False},
+        }
+        checks = _check_specs(metrics, specs)
+        assert checks["sanity_headroom_q1"] is True
+        assert checks["sanity_ptat_swing"] is False

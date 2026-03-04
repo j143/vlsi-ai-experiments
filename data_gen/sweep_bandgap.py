@@ -56,10 +56,12 @@ logger = logging.getLogger(__name__)
 # ILLUSTRATIVE RANGES — adjust for actual PDK constraints.
 PARAM_SPACE: list[tuple[str, float, float, str]] = [
     ("N",   4,     16,    "int"),   # BJT emitter area ratio [dimensionless]
-    ("R1",  50e3,  200e3, "log"),   # Top resistor [Ω]
-    ("R2",  5e3,   30e3,  "log"),   # PTAT resistor [Ω]
-    ("W_P", 2e-6,  10e-6, "lin"),   # PMOS width [m]
-    ("L_P", 0.5e-6, 3e-6, "lin"),  # PMOS length [m]
+    ("R1",  10e3,  40e3,  "log"),   # PTAT resistor between emitters [Ω]
+                                    #   sets I_PTAT = VT·ln(N)/R1 ∈ [1.4, 5.4] µA for N=8
+    ("R2",  50e3,  180e3, "log"),   # Emitter-to-GND resistor [Ω]
+                                    #   R2/R1 ≈ 5–6 for Vref ≈ 1.2 V with zero TC
+    ("W_P", 5e-6,  20e-6, "lin"),   # PMOS mirror width [m]
+    ("L_P", 1e-6,  4e-6,  "lin"),   # PMOS mirror length [m] (longer L → better matching)
 ]
 
 

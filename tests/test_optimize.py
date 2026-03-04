@@ -30,28 +30,28 @@ class TestSyntheticBandgapRunner:
 
     def test_run_returns_expected_keys(self):
         runner = self._make_runner()
-        result = runner.run({"N": 8, "R1": 100e3, "R2": 10e3, "W_P": 4e-6, "L_P": 1e-6})
+        result = runner.run({"N": 8, "R1": 20e3, "R2": 100e3, "W_P": 10e-6, "L_P": 2e-6})
         for key in ("vref_V", "iq_uA", "spec_checks", "raw_output", "error"):
             assert key in result, f"Missing key: {key}"
 
     def test_run_vref_near_target_for_canonical_params(self):
-        """Brokaw formula with default params should give Vref ≈ 1.19 V."""
+        """Corrected Brokaw formula with R1=20kΩ, R2=100kΩ, N=8 → Vref ≈ 1.19 V."""
         runner = self._make_runner()
-        result = runner.run({"N": 8, "R1": 100e3, "R2": 10e3, "W_P": 4e-6, "L_P": 1e-6})
+        result = runner.run({"N": 8, "R1": 20e3, "R2": 100e3, "W_P": 10e-6, "L_P": 2e-6})
         assert result["vref_V"] is not None
         assert 0.9 < result["vref_V"] < 1.5, f"Vref out of plausible range: {result['vref_V']}"
 
     def test_run_spec_checks_present(self):
         runner = self._make_runner()
-        result = runner.run({"N": 8, "R1": 100e3, "R2": 10e3, "W_P": 4e-6, "L_P": 1e-6})
+        result = runner.run({"N": 8, "R1": 20e3, "R2": 100e3, "W_P": 10e-6, "L_P": 2e-6})
         assert "vref" in result["spec_checks"]
         assert "iq" in result["spec_checks"]
 
     def test_run_spec_pass_when_vref_at_target(self):
-        """With parameters tuned for 1.2 V, vref spec should pass."""
+        """With R1=20kΩ, R2=100kΩ, N=8 → Vref ≈ 1.19 V (near 1.2 V ± 10 mV target)."""
         runner = self._make_runner()
-        # R1/R2 = 10, N=8 → Vref ≈ 1.19 V (close to 1.2 V ± 10 mV)
-        result = runner.run({"N": 8, "R1": 100e3, "R2": 10e3, "W_P": 4e-6, "L_P": 1e-6})
+        # Corrected formula: Vref = Vbe + 2*(R2/R1)*VT*ln(N) ≈ 0.65 + 0.54 ≈ 1.19 V
+        result = runner.run({"N": 8, "R1": 20e3, "R2": 100e3, "W_P": 10e-6, "L_P": 2e-6})
         # May or may not pass due to noise; just assert it is a bool
         assert isinstance(result["spec_checks"]["vref"], bool)
 
@@ -61,13 +61,13 @@ class TestSyntheticBandgapRunner:
 
     def test_no_error_field(self):
         runner = self._make_runner()
-        result = runner.run({"N": 8, "R1": 100e3, "R2": 10e3, "W_P": 4e-6, "L_P": 1e-6})
+        result = runner.run({"N": 8, "R1": 20e3, "R2": 100e3, "W_P": 10e-6, "L_P": 2e-6})
         assert result["error"] is None
 
     def test_result_is_json_serializable(self):
         """All values in run() output must be JSON-serializable."""
         runner = self._make_runner()
-        result = runner.run({"N": 8, "R1": 100e3, "R2": 10e3, "W_P": 4e-6, "L_P": 1e-6})
+        result = runner.run({"N": 8, "R1": 20e3, "R2": 100e3, "W_P": 10e-6, "L_P": 2e-6})
         # Should not raise
         json.dumps(result)
 
@@ -144,7 +144,7 @@ class TestPlotHelpers:
         runner = SyntheticBandgapRunner(seed=7)
         entries = []
         for i in range(n):
-            p = {"N": 8, "R1": 100e3, "R2": 10e3, "W_P": 4e-6, "L_P": 1e-6}
+            p = {"N": 8, "R1": 20e3, "R2": 100e3, "W_P": 10e-6, "L_P": 2e-6}
             r = runner.run(p)
             entries.append({
                 "iteration": i, "source": "lhs", "params": p,
