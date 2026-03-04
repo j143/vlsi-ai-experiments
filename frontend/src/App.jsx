@@ -257,8 +257,8 @@ function CandidateRow({ c, selected, onClick }) {
     >
       <span style={{ fontSize: '0.75rem', color: '#38bdf8', fontWeight: '600' }}>{c.id}</span>
       <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{c.variables}</span>
-      <span style={{ fontSize: '0.7rem', color: '#f8fafc', textAlign: 'right' }}>{c.surrogate}</span>
-      <span style={{ fontSize: '0.7rem', color: '#94a3b8', textAlign: 'right' }}>{c.spice}</span>
+      <span style={{ fontSize: '0.7rem', color: '#f8fafc', textAlign: 'right' }}>{c.vref_mV ?? c.surrogate}</span>
+      <span style={{ fontSize: '0.7rem', color: '#94a3b8', textAlign: 'right' }}>{c.err_mV != null ? `±${c.err_mV}` : c.spice}</span>
       <span style={{ fontSize: '0.7rem', color: '#94a3b8', textAlign: 'right' }}>{c.power}</span>
       <div style={{ display: 'flex', justifyContent: 'center' }}>
         <span style={S.badge(c.status)}>{c.status}</span>
@@ -403,7 +403,7 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
             padding: '0 0.625rem 0.375rem',
             borderBottom: '1px solid #334155',
           }}>
-            {['ID', 'Variables', 'Vref (mV)', 'Vref', 'Power', 'Status'].map((h) => (
+            {['ID', 'Variables', 'Vref (mV)', 'Err (mV)', 'Power', 'Status'].map((h) => (
               <span key={h} style={{ fontSize: '0.65rem', color: '#475569', fontWeight: '600', textTransform: 'uppercase' }}>{h}</span>
             ))}
           </div>
@@ -435,8 +435,8 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
           <div style={S.cardTitle}><Eye size={13} />Selected: {selectedCandidate?.id}</div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.5rem' }}>
             {[
-              { label: 'Vref', value: selectedCandidate ? `${parseFloat(selectedCandidate.surrogate).toFixed(1)} mV` : '—' },
-              { label: 'TempCo', value: (selectedCandidate?.spice ?? '—') + ' mV' },
+              { label: 'Vref', value: selectedCandidate ? `${parseFloat(selectedCandidate.vref_mV ?? selectedCandidate.surrogate ?? 0).toFixed(1)} mV` : '—' },
+              { label: '|Err| from 1200mV', value: selectedCandidate?.err_mV != null ? `${selectedCandidate.err_mV} mV` : '—' },
               { label: 'PSRR', value: optimResult ? '—' : '-61.2 dB' },
               { label: 'Iq', value: optimResult ? '—' : '9.8 µA' },
               { label: 'Power', value: selectedCandidate?.power ?? '—' },
@@ -664,6 +664,22 @@ const NAV_ITEMS = [
   { id: 'logs', label: 'Logs', icon: Terminal },
 ];
 
+/** Convert raw optimizer history entries into candidate rows for the table. */
+function _historyToCandidates(history) {
+  return [...history]
+    .filter((e) => e.vref_V != null)
+    .sort((a, b) => Math.abs(a.vref_V - 1.2) - Math.abs(b.vref_V - 1.2))
+    .slice(0, 3)
+    .map((e) => ({
+      id: `BG-${String(e.iteration + 1).padStart(3, '0')}`,
+      variables: `N=${e.params.N}, W=${((e.params.W_P || 4e-6) * 1e6).toFixed(1)}µm`,
+      vref_mV: (e.vref_V * 1000).toFixed(1),
+      err_mV: Math.abs(e.vref_V * 1000 - 1200).toFixed(1),
+      power: e.iq_uA != null ? `${(e.iq_uA * 1.8).toFixed(1)}µW` : '—',
+      status: e.spec_vref_pass ? 'pass' : 'fail',
+    }));
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('optimization');
   const [isSimulating, setIsSimulating] = useState(false);
@@ -694,18 +710,7 @@ export default function App() {
 
   // Derive live candidates from optimizer history (top 3 by closest Vref)
   const liveCandidates = optimResult
-    ? [...optimResult.history]
-        .filter((e) => e.vref_V != null)
-        .sort((a, b) => Math.abs(a.vref_V - 1.2) - Math.abs(b.vref_V - 1.2))
-        .slice(0, 3)
-        .map((e) => ({
-          id: `BG-${String(e.iteration + 1).padStart(3, '0')}`,
-          variables: `N=${e.params.N}, W=${((e.params.W_P || 4e-6) * 1e6).toFixed(1)}µm`,
-          surrogate: (e.vref_V * 1000).toFixed(1),
-          spice: (e.vref_V * 1000).toFixed(1),
-          power: e.iq_uA != null ? `${(e.iq_uA * 1.8).toFixed(1)}µW` : '—',
-          status: e.spec_vref_pass ? 'pass' : 'fail',
-        }))
+    ? _historyToCandidates(optimResult.history)
     : CANDIDATES;
 
   // Derive live convergence from optimizer response
@@ -747,18 +752,7 @@ export default function App() {
       const data = await resp.json();
       setOptimResult(data);
       if (data.history?.length) {
-        const topCands = [...data.history]
-          .filter((e) => e.vref_V != null)
-          .sort((a, b) => Math.abs(a.vref_V - 1.2) - Math.abs(b.vref_V - 1.2))
-          .slice(0, 3)
-          .map((e) => ({
-            id: `BG-${String(e.iteration + 1).padStart(3, '0')}`,
-            variables: `N=${e.params.N}, W=${((e.params.W_P || 4e-6) * 1e6).toFixed(1)}µm`,
-            surrogate: (e.vref_V * 1000).toFixed(1),
-            spice: (e.vref_V * 1000).toFixed(1),
-            power: e.iq_uA != null ? `${(e.iq_uA * 1.8).toFixed(1)}µW` : '—',
-            status: e.spec_vref_pass ? 'pass' : 'fail',
-          }));
+        const topCands = _historyToCandidates(data.history);
         if (topCands.length) setSelectedCandidate(topCands[0]);
       }
     } catch (err) {

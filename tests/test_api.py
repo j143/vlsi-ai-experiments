@@ -113,7 +113,8 @@ class TestOptimize:
             json={"budget": 9999, "n_init": 1, "seed": 0},
         )
         data = resp.get_json()
-        assert data["n_simulations"] <= 100
+        from api.server import _MAX_BUDGET
+        assert data["n_simulations"] <= _MAX_BUDGET
 
     def test_default_params_accepted(self, client):
         """Calling /api/optimize with no body should work."""

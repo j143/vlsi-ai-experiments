@@ -66,7 +66,13 @@ def _safe_json(data) -> Response:
         mimetype="application/json",
     )
 
-# Single shared runner instance (stateless — safe to share across requests)
+# Maximum number of ngspice/surrogate calls per optimization request.
+# Prevents runaway computation in the synchronous request handler.
+_MAX_BUDGET = 100
+
+# Single shared runner instance (stateless — safe to share across requests).
+# BandgapRunner.__init__ only reads files; it does NOT invoke ngspice, so this
+# is safe to call at import time even when ngspice is absent.
 _runner = BandgapRunner()
 
 
@@ -196,7 +202,7 @@ def optimize():
     n_init = int(body.get("n_init", 5))
     seed = int(body.get("seed", 42))
 
-    budget = max(1, min(budget, 100))  # clamp to reasonable range
+    budget = max(1, min(budget, _MAX_BUDGET))  # prevent excessive computation
     n_init = max(1, min(n_init, budget))
 
     try:
@@ -233,7 +239,6 @@ def optimize():
 
     payload = result.to_dict()
     payload["convergence"] = convergence
-    payload.pop("error", None)  # OptimizationResult has no 'error' field; remove if present
     return _safe_json(payload)
 
 
