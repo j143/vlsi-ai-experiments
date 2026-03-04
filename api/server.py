@@ -10,6 +10,8 @@ POST /api/simulate         Runs a single ngspice simulation for given params.
 POST /api/optimize         Runs the Bayesian optimization loop and returns results.
 GET  /api/optimize/stream  Streams optimizer progress via SSE.
 GET  /api/layout/preview   Returns synthetic layout patch + DRC summary.
+POST /api/project/save     Saves project state to results/projects/*.json.
+POST /api/netlist/export   Renders a parameterized SPICE netlist.
 
 Usage::
 
@@ -26,6 +28,7 @@ import logging
 import math
 import sys
 import threading
+from datetime import datetime
 from queue import Queue
 from pathlib import Path
 
@@ -37,7 +40,7 @@ from flask_cors import CORS
 _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
-from bandgap.runner import BandgapRunner  # noqa: E402
+from bandgap.runner import BandgapRunner, NETLIST_TEMPLATE, _render_netlist  # noqa: E402
 from layout.data_stub import LAYER_MAP, PatchConfig, generate_synthetic_patch  # noqa: E402
 from layout.evaluate import run_drc  # noqa: E402
 from ml.optimize import SyntheticBandgapRunner  # noqa: E402
@@ -87,6 +90,7 @@ def _safe_json(data) -> Response:
 # Maximum number of ngspice/surrogate calls per optimization request.
 # Prevents runaway computation in the synchronous request handler.
 _MAX_BUDGET = 100
+_PROJECTS_DIR = _REPO_ROOT / "results" / "projects"
 
 # Single shared runner instance (stateless — safe to share across requests).
 # BandgapRunner.__init__ only reads files; it does NOT invoke ngspice, so this
@@ -434,6 +438,71 @@ def layout_preview():
             "layer_map": {str(k): v for k, v in LAYER_MAP.items()},
             "patch": patch.tolist(),
             "drc": drc,
+        }
+    )
+
+
+@app.post("/api/project/save")
+def project_save():
+    """Persist frontend project state as JSON under results/projects."""
+    body = request.get_json(silent=True) or {}
+    state = body.get("state", {})
+    project_name = str(body.get("project_name", "vlsi_ai_project")).strip() or "vlsi_ai_project"
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in project_name)
+    out_path = _PROJECTS_DIR / f"{safe_name}_{timestamp}.json"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    payload = {
+        "project_name": project_name,
+        "saved_at": datetime.now().isoformat(),
+        "state": state,
+    }
+    out_path.write_text(json.dumps(payload, indent=2))
+
+    return _safe_json(
+        {
+            "ok": True,
+            "project_name": project_name,
+            "saved_path": str(out_path.relative_to(_REPO_ROOT)),
+        }
+    )
+
+
+@app.post("/api/netlist/export")
+def netlist_export():
+    """Render and return a parameterized SPICE netlist from given params."""
+    body = request.get_json(silent=True) or {}
+    params = body.get("params", {})
+    if not isinstance(params, dict) or not params:
+        return Response(
+            json.dumps({"error": "params must be a non-empty JSON object"}),
+            status=400,
+            mimetype="application/json",
+        )
+
+    cleaned: dict[str, float] = {}
+    for key, value in params.items():
+        try:
+            cleaned[key] = float(value)
+        except (TypeError, ValueError):
+            return Response(
+                json.dumps({"error": f"Non-numeric value for param '{key}': {value!r}"}),
+                status=400,
+                mimetype="application/json",
+            )
+
+    netlist_text = _render_netlist(Path(NETLIST_TEMPLATE), cleaned)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"bandgap_export_{timestamp}.sp"
+
+    return _safe_json(
+        {
+            "ok": True,
+            "filename": filename,
+            "netlist_text": netlist_text,
+            "params": cleaned,
         }
     )
 

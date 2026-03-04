@@ -395,7 +395,7 @@ function LayoutViewer({ layer, layoutData }) {
 
 // --- Tab views ---
 
-function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult, liveEstimate, isEstimating, estimateError, cornerData, overallStatus }) {
+function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult, liveEstimate, isEstimating, estimateError, cornerData, overallStatus, onExportNetlist }) {
   const displayCandidates = candidates || CANDIDATES;
   const displayConvergence = convergenceData?.length ? convergenceData : CONVERGENCE;
   const anyPass = displayCandidates.some((c) => c.status === 'pass');
@@ -512,7 +512,7 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
             ))}
           </div>
           <div style={{ marginTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-            <button style={S.btn('primary', { flex: 1, fontSize: '0.75rem' })}>
+            <button style={S.btn('primary', { flex: 1, fontSize: '0.75rem' })} onClick={onExportNetlist}>
               <FileCode size={12} />Export Netlist
             </button>
           </div>
@@ -722,6 +722,19 @@ function LogsTab({ logLines, logRef }) {
   );
 }
 
+function _paramsFromDesignValues(designValues) {
+  const nRatio = Math.max(1, Math.round(designValues.r_ratio));
+  const iBiasA = Math.max(0.1, designValues.i_bias) * 1e-6;
+  const r1 = 1.8 / iBiasA;
+  return {
+    N: nRatio,
+    R1: r1,
+    R2: r1 / nRatio,
+    W_P: designValues.w_m1 * 1e-6,
+    L_P: 1e-6,
+  };
+}
+
 // --- Main App ---
 
 const NAV_ITEMS = [
@@ -744,6 +757,7 @@ function _historyToCandidates(history) {
       return {
         id: `BG-${String(e.iteration + 1).padStart(3, '0')}`,
         variables: `N=${e.params.N}, W=${((e.params.W_P || 4e-6) * 1e6).toFixed(1)}µm`,
+        params: e.params,
         vref_mV: (e.vref_V * 1000).toFixed(1),
         err_mV: Math.abs(e.vref_V * 1000 - 1200).toFixed(1),
         iq_uA: e.iq_uA != null ? Number(e.iq_uA.toFixed(2)) : null,
@@ -806,6 +820,7 @@ export default function App() {
   const [estimateError, setEstimateError] = useState(null);
   const [layoutData, setLayoutData] = useState(null);
   const [layoutError, setLayoutError] = useState(null);
+  const [uiNotice, setUiNotice] = useState(null);
   const logRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -841,16 +856,7 @@ export default function App() {
       setIsEstimating(true);
       setEstimateError(null);
 
-      const nRatio = Math.max(1, Math.round(designValues.r_ratio));
-      const iBiasA = Math.max(0.1, designValues.i_bias) * 1e-6;
-      const r1 = 1.8 / iBiasA;
-      const simParams = {
-        N: nRatio,
-        R1: r1,
-        R2: r1 / nRatio,
-        W_P: designValues.w_m1 * 1e-6,
-        L_P: 1e-6,
-      };
+      const simParams = _paramsFromDesignValues(designValues);
 
       try {
         const useSynthetic = serverStatus.ngspice_available === false;
@@ -1006,6 +1012,56 @@ export default function App() {
     };
   };
 
+  const handleSaveProject = async () => {
+    try {
+      const resp = await fetch('/api/project/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project_name: 'bandgap_ui',
+          state: {
+            activeTab,
+            designValues,
+            selectedCandidate,
+            optimResult,
+            serverStatus,
+          },
+        }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'save failed');
+      setUiNotice(`Project saved: ${data.saved_path}`);
+    } catch (err) {
+      setApiError(err.message);
+    }
+  };
+
+  const handleExportNetlist = async () => {
+    const exportParams = selectedCandidate?.params || _paramsFromDesignValues(designValues);
+    try {
+      const resp = await fetch('/api/netlist/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params: exportParams }),
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || 'export failed');
+
+      const blob = new Blob([data.netlist_text], { type: 'text/plain;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = data.filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      setUiNotice(`Netlist exported: ${data.filename}`);
+    } catch (err) {
+      setApiError(err.message);
+    }
+  };
+
   // Summarise backend status for bottom bar
   const statusDot = serverStatus.ok === false
     ? '#f87171'
@@ -1041,7 +1097,7 @@ export default function App() {
           <button style={S.btn()} title="Simulation history"><History size={14} /></button>
           <button style={S.btn()} title="Branch"><GitBranch size={14} /></button>
           <button style={S.btn()} title="Settings"><Settings size={14} /></button>
-          <button style={S.btn('primary')}>
+          <button style={S.btn('primary')} onClick={handleSaveProject}>
             <Save size={13} />Save Project
           </button>
         </div>
@@ -1081,6 +1137,16 @@ export default function App() {
               <span>API error: {apiError}</span>
             </div>
           )}
+          {uiNotice && (
+            <div style={{
+              backgroundColor: '#0f172a', color: '#6ee7b7',
+              border: '1px solid #334155',
+              borderRadius: '0.375rem', padding: '0.5rem 0.875rem',
+              marginBottom: '0.75rem', fontSize: '0.8rem',
+            }}>
+              {uiNotice}
+            </div>
+          )}
           {activeTab === 'optimization' && (
             <OptimizationTab
               isSimulating={isSimulating}
@@ -1097,6 +1163,7 @@ export default function App() {
               estimateError={estimateError}
               cornerData={liveCornerData}
               overallStatus={overallStatus}
+              onExportNetlist={handleExportNetlist}
             />
           )}
           {activeTab === 'layout' && (

@@ -212,3 +212,27 @@ class TestLayoutPreview:
         assert len(data["patch"]) == data["n_layers"]
         assert len(data["patch"][0]) == data["patch_size"]
         assert len(data["patch"][0][0]) == data["patch_size"]
+
+
+class TestProjectAndExport:
+    def test_project_save_returns_path(self, client):
+        resp = client.post(
+            "/api/project/save",
+            json={"project_name": "ui_state", "state": {"foo": "bar"}},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["saved_path"].startswith("results/projects/")
+
+    def test_netlist_export_returns_text(self, client):
+        resp = client.post(
+            "/api/netlist/export",
+            json={"params": {"N": 8, "R1": 100000, "R2": 10000, "W_P": 4e-6, "L_P": 1e-6}},
+        )
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["filename"].endswith(".sp")
+        assert isinstance(data["netlist_text"], str)
+        assert len(data["netlist_text"]) > 0
