@@ -328,7 +328,10 @@ class BayesianOptimizer:
             "params": params,
             "vref_V": vref,
             "iq_uA": sim_result.get("iq_uA"),
+            "psrr_dB": sim_result.get("psrr_dB"),
             "spec_vref_pass": spec_pass,
+            "spec_iq_pass": sim_result.get("spec_checks", {}).get("iq"),
+            "spec_psrr_pass": sim_result.get("spec_checks", {}).get("psrr"),
             "acquisition_score": acquisition_score,
             "sim_time_s": round(elapsed, 4),
             "error": sim_result.get("error") or "",
@@ -380,17 +383,21 @@ class SyntheticBandgapRunner:
         Vref = Vbe + (R1 / R2) * VT * np.log(max(N, 1.0))
         Vref += self._rng.normal(0, self.noise_std)
         iq_uA = Vref / R1 * 1e6
+        psrr_dB = -58.0 - 1.2 * np.log10(max(N, 1.0)) + self._rng.normal(0, 0.8)
 
         target = self.specs["vref"]["target_V"]
         tol = self.specs["vref"]["tolerance_V"]
         spec_vref = bool(abs(Vref - target) <= tol)
         spec_iq = bool(iq_uA <= self.specs["quiescent_current"]["max_uA"])
+        psrr_min_dB = float(self.specs.get("psrr", {}).get("min_dc_dB", 60.0))
+        spec_psrr = bool(abs(psrr_dB) >= psrr_min_dB)
 
         return {
             "params": params,
             "vref_V": float(Vref),
             "iq_uA": float(iq_uA),
-            "spec_checks": {"vref": spec_vref, "iq": spec_iq},
+            "psrr_dB": float(psrr_dB),
+            "spec_checks": {"vref": spec_vref, "iq": spec_iq, "psrr": spec_psrr},
             "raw_output": "",
             "error": None,
         }
@@ -586,7 +593,6 @@ def main() -> None:
     # Index (1-based) of first passing sample in random sweep order
     passing_indices = bf_pass_mask[bf_pass_mask].index.tolist()
     bf_first_pass_at = int(passing_indices[0]) + 1 if passing_indices else args.brute_force_n
-
     # -----------------------------------------------------------------------
     # 4. Load surrogate metrics (produced by ml.surrogate main)
     # -----------------------------------------------------------------------
