@@ -853,10 +853,11 @@ export default function App() {
       };
 
       try {
+        const useSynthetic = serverStatus.ngspice_available === false;
         const resp = await fetch('/api/simulate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ params: simParams }),
+          body: JSON.stringify({ params: simParams, use_synthetic: useSynthetic }),
         });
         const data = await resp.json();
         if (!resp.ok || data.error) {
@@ -876,7 +877,7 @@ export default function App() {
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [designValues]);
+  }, [designValues, serverStatus.ngspice_available]);
 
   // Derive live candidates from optimizer history (top 3 by closest Vref)
   const liveCandidates = optimResult
@@ -924,7 +925,12 @@ export default function App() {
       streamRef.current = null;
     }
 
-    const query = new URLSearchParams({ budget: '50', n_init: '10', seed: '42' });
+    const query = new URLSearchParams({
+      budget: '50',
+      n_init: '10',
+      seed: '42',
+      use_synthetic: serverStatus.ngspice_available === false ? 'true' : 'false',
+    });
     const source = new EventSource(`/api/optimize/stream?${query.toString()}`);
     streamRef.current = source;
 

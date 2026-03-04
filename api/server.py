@@ -95,10 +95,20 @@ _runner = BandgapRunner()
 
 
 def _get_runner(use_synthetic: bool = False):
-    """Return the real runner if ngspice is available, otherwise the synthetic one."""
-    if use_synthetic or not _runner.is_ngspice_available():
+    """Return runner selected by caller.
+
+    Real ngspice flow is the default path. Synthetic runner is only used when
+    explicitly requested by the client.
+    """
+    if use_synthetic:
         return SyntheticBandgapRunner()
     return _runner
+
+
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 # ---------------------------------------------------------------------------
@@ -149,6 +159,7 @@ def simulate():
     """
     body = request.get_json(silent=True) or {}
     params = body.get("params", {})
+    use_synthetic = bool(body.get("use_synthetic", False))
 
     if not isinstance(params, dict):
         return Response(json.dumps({"error": "params must be a JSON object"}), status=400, mimetype="application/json")
@@ -164,7 +175,21 @@ def simulate():
                 mimetype="application/json",
             )
 
-    result = _get_runner().run(params)
+    if not use_synthetic and not _runner.is_ngspice_available():
+        return Response(
+            json.dumps(
+                {
+                    "error": (
+                        "ngspice is not available. Real ngspice-backed simulation is the default. "
+                        "Set use_synthetic=true to run the synthetic fallback."
+                    )
+                }
+            ),
+            status=503,
+            mimetype="application/json",
+        )
+
+    result = _get_runner(use_synthetic=use_synthetic).run(params)
     # raw_output can be large — omit it from the API response
     result.pop("raw_output", None)
     return _safe_json(result)
@@ -219,15 +244,30 @@ def optimize():
     budget = int(body.get("budget", 50))
     n_init = int(body.get("n_init", 10))
     seed = int(body.get("seed", 42))
+    use_synthetic = bool(body.get("use_synthetic", False))
 
     budget = max(1, min(budget, _MAX_BUDGET))  # prevent excessive computation
     n_init = max(1, min(n_init, budget))
+
+    if not use_synthetic and not _runner.is_ngspice_available():
+        return Response(
+            json.dumps(
+                {
+                    "error": (
+                        "ngspice is not available. Real ngspice-backed optimization is the default. "
+                        "Set use_synthetic=true to run the synthetic fallback."
+                    )
+                }
+            ),
+            status=503,
+            mimetype="application/json",
+        )
 
     try:
         # Import here to avoid startup cost when only /status or /simulate is used
         from ml.optimize import BayesianOptimizer  # noqa: PLC0415
 
-        runner = _get_runner()
+        runner = _get_runner(use_synthetic=use_synthetic)
         opt = BayesianOptimizer(runner=runner, budget=budget, n_init=n_init)
         result = opt.run(seed=seed)
     except Exception as exc:
@@ -277,9 +317,24 @@ def optimize_stream():
     budget = int(request.args.get("budget", 50))
     n_init = int(request.args.get("n_init", 10))
     seed = int(request.args.get("seed", 42))
+    use_synthetic = _parse_bool(request.args.get("use_synthetic"), default=False)
 
     budget = max(1, min(budget, _MAX_BUDGET))
     n_init = max(1, min(n_init, budget))
+
+    if not use_synthetic and not _runner.is_ngspice_available():
+        return Response(
+            json.dumps(
+                {
+                    "error": (
+                        "ngspice is not available. Real ngspice-backed optimization is the default. "
+                        "Set use_synthetic=true to run the synthetic fallback."
+                    )
+                }
+            ),
+            status=503,
+            mimetype="application/json",
+        )
 
     def _sse(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(_sanitize_json(data))}\n\n"
@@ -291,7 +346,7 @@ def optimize_stream():
             try:
                 from ml.optimize import BayesianOptimizer  # noqa: PLC0415
 
-                runner = _get_runner()
+                runner = _get_runner(use_synthetic=use_synthetic)
                 opt = BayesianOptimizer(runner=runner, budget=budget, n_init=n_init)
 
                 def on_progress(entry: dict, summary: dict) -> None:
