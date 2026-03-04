@@ -53,6 +53,10 @@ logger = logging.getLogger(__name__)
 # Feature columns expected in the sweep CSV
 FEATURES = ["N", "R1", "R2", "W_P", "L_P"]
 
+# Numerical stability constants used in the synthetic data generator
+_MIN_N = 1.01          # minimum BJT area ratio to keep log(N) > 0
+_MIN_VREF_FOR_TC = 0.1  # minimum Vref [V] used as denominator in TC calculation
+
 
 class _BaseSurrogate:
     """Abstract base class for surrogate models.
@@ -295,28 +299,31 @@ def evaluate_surrogate(
         Contains: ``r2``, ``rmse``, ``max_abs_error``, ``mean_std``,
         ``within_1sigma_frac`` (fraction of test points where |error| < 1σ).
     """
-    from sklearn.metrics import r2_score
+    from sklearn.metrics import r2_score, mean_absolute_error
 
     mean, std = model.predict_with_uncertainty(X_test)
     errors = np.abs(mean - y_test)
 
     r2 = float(r2_score(y_test, mean))
+    mae = float(mean_absolute_error(y_test, mean))
     rmse = float(np.sqrt(np.mean((mean - y_test) ** 2)))
     max_err = float(errors.max())
     mean_std = float(std.mean())
     within_1sigma = float((errors < std).mean())
 
     metrics = {
+        "mae": mae,
         "r2": r2,
         "rmse": rmse,
         "max_abs_error": max_err,
         "mean_std": mean_std,
         "within_1sigma_frac": within_1sigma,
+        "coverage_90": float((errors < 1.645 * std).mean()),
     }
     logger.info(
-        "Surrogate eval — R²: %.4f  RMSE: %.4e  max|err|: %.4e  "
+        "Surrogate eval — R²: %.4f  MAE: %.4e  RMSE: %.4e  max|err|: %.4e  "
         "mean σ: %.4e  within 1σ: %.1f%%",
-        r2, rmse, max_err, mean_std, 100 * within_1sigma,
+        r2, mae, rmse, max_err, mean_std, 100 * within_1sigma,
     )
     return metrics
 
@@ -338,11 +345,15 @@ def _generate_synthetic_data(n: int = 100, seed: int = 42) -> pd.DataFrame:
     Returns
     -------
     pd.DataFrame
-        Columns: N, R1, R2, W_P, L_P, vref_V, iq_uA, error.
+        Columns: N, R1, R2, W_P, L_P, vref_V, tc_ppm_C, psrr_dB, iq_uA, error.
     """
     import sys
     sys.path.insert(0, str(Path(__file__).parent.parent))
     from data_gen.sweep_bandgap import _make_lhs_samples  # noqa: E402
+
+    K_B = 1.380649e-23  # J/K
+    Q_E = 1.602176634e-19  # C
+    T_NOM = 300.0  # K
 
     rng = np.random.default_rng(seed)
     samples = _make_lhs_samples(n_samples=n, rng=rng)
@@ -352,11 +363,38 @@ def _generate_synthetic_data(n: int = 100, seed: int = 42) -> pd.DataFrame:
         VT = 0.02585  # Thermal voltage at 300 K [V]
         Vbe = 0.650 + rng.normal(0, 0.002)  # ±2 mV process variation
         # Brokaw formula: Vref ≈ Vbe + (R1/R2) * VT * ln(N)
-        Vref = Vbe + (p["R1"] / p["R2"]) * VT * float(np.log(p["N"]))
+        Vref = Vbe + (p["R1"] / p["R2"]) * VT * float(np.log(max(p["N"], _MIN_N)))
         Vref += rng.normal(0, 0.002)  # ±2 mV simulation noise
         Vref = float(np.clip(Vref, 0.55, 3.4))
         iq_uA = Vref / p["R1"] * 1e6
-        rows.append({**p, "vref_V": float(Vref), "iq_uA": float(iq_uA), "error": ""})
+
+        # Approximate TC using two-temperature method
+        dvbe_dt = -2.0e-3
+        T_cold, T_hot = 233.0, 398.0
+        N = max(p["N"], _MIN_N)
+        vref_cold = float(np.clip(
+            (0.65 + dvbe_dt * (T_cold - T_NOM))
+            + (p["R1"] / p["R2"]) * (K_B * T_cold / Q_E) * np.log(N),
+            0.3, 2.5))
+        vref_hot = float(np.clip(
+            (0.65 + dvbe_dt * (T_hot - T_NOM))
+            + (p["R1"] / p["R2"]) * (K_B * T_hot / Q_E) * np.log(N),
+            0.3, 2.5))
+        tc_ppm_C = round(
+            abs(vref_hot - vref_cold) / (max(Vref, _MIN_VREF_FOR_TC) * (T_hot - T_cold)) * 1e6,
+            2,
+        )
+
+        psrr_dB = round(-58.0 - 1.2 * np.log10(max(N, _MIN_N)), 2)
+
+        rows.append({
+            **p,
+            "vref_V": float(Vref),
+            "tc_ppm_C": tc_ppm_C,
+            "psrr_dB": psrr_dB,
+            "iq_uA": float(iq_uA),
+            "error": "",
+        })
 
     return pd.DataFrame(rows)
 

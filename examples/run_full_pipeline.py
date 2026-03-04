@@ -50,22 +50,44 @@ TOLERANCE = 0.010
 
 
 def load_dataset(path: str | None) -> pd.DataFrame:
-    """Load dataset from CSV, or generate the analytical one."""
+    """Load dataset from CSV, or generate the analytical one.
+
+    Applies row filtering:
+      - Drops rows where the ``error`` column is non-empty (failed simulations).
+      - If a ``corner`` column is present, logs per-corner counts but keeps all
+        corners so the surrogate learns process variation too.
+    """
     if path and Path(path).exists():
         df = pd.read_csv(path)
         logger.info("Loaded dataset from %s (%d rows)", path, len(df))
     else:
-        # Generate on-the-fly
-        demo_path = Path(__file__).parent / "demo_dataset.csv"
-        if demo_path.exists():
-            df = pd.read_csv(str(demo_path))
-            logger.info("Loaded demo dataset (%d rows)", len(df))
+        # Prefer the pre-generated real dataset if it exists
+        real_path = Path(__file__).parent.parent / "datasets" / "bandgap_sweep_real_sky130.csv"
+        if real_path.exists():
+            df = pd.read_csv(str(real_path))
+            logger.info("Loaded real dataset from %s (%d rows)", real_path, len(df))
         else:
-            logger.info("No dataset found — generating analytical dataset...")
-            from examples.generate_reference_dataset import generate_dataset
-            df = generate_dataset(n_samples=200, seed=42)
-            df.to_csv(str(demo_path), index=False)
-            logger.info("Generated and saved demo dataset (%d rows)", len(df))
+            demo_path = Path(__file__).parent / "demo_dataset.csv"
+            if demo_path.exists():
+                df = pd.read_csv(str(demo_path))
+                logger.info("Loaded demo dataset (%d rows)", len(df))
+            else:
+                logger.info("No dataset found — generating analytical dataset...")
+                from examples.generate_reference_dataset import generate_dataset
+                df = generate_dataset(n_samples=200, seed=42)
+                df.to_csv(str(demo_path), index=False)
+                logger.info("Generated and saved demo dataset (%d rows)", len(df))
+
+    # Drop failed simulation rows (keeps all corners)
+    if "error" in df.columns:
+        before = len(df)
+        df = df[df["error"].isna() | (df["error"] == "")].reset_index(drop=True)
+        if len(df) < before:
+            logger.info("Dropped %d failed-simulation rows.", before - len(df))
+
+    if "corner" in df.columns:
+        logger.info("Corners in dataset: %s", df["corner"].value_counts().to_dict())
+
     return df
 
 
@@ -78,6 +100,10 @@ def step1_explore(df: pd.DataFrame) -> None:
     print(f"  Features:     {FEATURES}")
     print(f"  Target:       {TARGET}")
 
+    if "corner" in df.columns:
+        corners = df["corner"].value_counts().to_dict()
+        print(f"  Corners:      {corners}")
+
     if TARGET in df.columns:
         valid = df[TARGET].notna()
         print(f"  Valid sims:   {valid.sum()}/{len(df)}")
@@ -86,8 +112,18 @@ def step1_explore(df: pd.DataFrame) -> None:
         errs = (df.loc[valid, TARGET] - VREF_TARGET).abs() * 1000
         print(f"  |Err| range:  {errs.min():.2f} – {errs.max():.2f} mV")
         spec_pass = (errs <= TOLERANCE * 1000).sum()
-        print(f"  Spec pass:    {spec_pass}/{valid.sum()} "
-              f"({spec_pass / valid.sum():.1%})")
+        print(f"  Vref spec:    {spec_pass}/{valid.sum()} "
+              f"({spec_pass / valid.sum():.1%}) pass")
+
+    if "tc_ppm_C" in df.columns:
+        tc = df["tc_ppm_C"].dropna()
+        print(f"  TC range:     {tc.min():.1f} – {tc.max():.1f} ppm/°C")
+        tc_pass = (tc <= 20).sum()
+        print(f"  TC spec:      {tc_pass}/{len(tc)} ({tc_pass/len(tc):.1%}) ≤ 20 ppm/°C")
+
+    if "psrr_dB" in df.columns:
+        psrr = df["psrr_dB"].dropna()
+        print(f"  PSRR range:   {psrr.min():.1f} – {psrr.max():.1f} dB")
 
 
 def step2_train_surrogate(df: pd.DataFrame):

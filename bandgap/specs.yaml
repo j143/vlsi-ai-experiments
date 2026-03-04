@@ -24,7 +24,8 @@ vref:
 # Temperature Coefficient
 # ---------------------------------------------------------------------------
 temperature_coefficient:
-  max_ppm_C: 30            # Maximum |TC| over full temperature range [ppm/°C]
+  max_ppm_C: 20            # Maximum |TC| over full temperature range [ppm/°C]
+  direction: minimize      # One-sided max — lower TC is always better; no "band" target
   # TC = (Vref_max - Vref_min) / (Vref_nom * delta_T) * 1e6
   temp_range_C: [-40, 125] # Temperature corners for TC calculation
 
