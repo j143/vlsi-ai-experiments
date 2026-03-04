@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Activity,
   Cpu,
@@ -827,15 +827,14 @@ export default function App() {
   const logRef = useRef(null);
   const streamRef = useRef(null);
 
-  const apiUrl = (path, base = apiBase) => `${base.replace(/\/$/, '')}${path}`;
-
-  const fetchApiJson = async (path, options = {}, allowFallback = true) => {
+  const fetchApiJson = useCallback(async (path, options = {}, allowFallback = true) => {
     const bases = [apiBase, ...(allowFallback && apiBase !== FALLBACK_API_BASE ? [FALLBACK_API_BASE] : [])];
     let lastErr = null;
 
     for (const base of bases) {
       try {
-        const resp = await fetch(apiUrl(path, base), options);
+        const url = `${base.replace(/\/$/, '')}${path}`;
+        const resp = await fetch(url, options);
         const text = await resp.text();
         let data = null;
         try {
@@ -859,7 +858,7 @@ export default function App() {
     }
 
     throw lastErr || new Error('API request failed');
-  };
+  }, [apiBase]);
 
   // Probe backend status on mount
   useEffect(() => {
@@ -873,7 +872,7 @@ export default function App() {
         setLayoutError(null);
       })
       .catch(() => setLayoutError('Could not load layout preview'));
-  }, []);
+  }, [fetchApiJson]);
 
   // Scroll log panel to bottom when new results arrive
   useEffect(() => {
@@ -917,7 +916,7 @@ export default function App() {
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [designValues, serverStatus.ngspice_available]);
+  }, [designValues, serverStatus.ngspice_available, fetchApiJson]);
 
   // Derive live candidates from optimizer history (top 3 by closest Vref)
   const liveCandidates = optimResult

@@ -87,6 +87,7 @@ def _safe_json(data) -> Response:
         mimetype="application/json",
     )
 
+
 # Maximum number of ngspice/surrogate calls per optimization request.
 # Prevents runaway computation in the synchronous request handler.
 _MAX_BUDGET = 100
@@ -168,7 +169,11 @@ def simulate():
     use_synthetic = bool(body.get("use_synthetic", False))
 
     if not isinstance(params, dict):
-        return Response(json.dumps({"error": "params must be a JSON object"}), status=400, mimetype="application/json")
+        return Response(
+            json.dumps({"error": "params must be a JSON object"}),
+            status=400,
+            mimetype="application/json",
+        )
 
     # Validate that all values are numeric
     for k, v in params.items():
@@ -260,7 +265,8 @@ def optimize():
             json.dumps(
                 {
                     "error": (
-                        "ngspice is not available. Real ngspice-backed optimization is the default. "
+                        "ngspice is not available. "
+                        "Real ngspice-backed optimization is the default. "
                         "Set use_synthetic=true to run the synthetic fallback."
                     )
                 }
@@ -333,7 +339,8 @@ def optimize_stream():
             json.dumps(
                 {
                     "error": (
-                        "ngspice is not available. Real ngspice-backed optimization is the default. "
+                        "ngspice is not available. "
+                        "Real ngspice-backed optimization is the default. "
                         "Set use_synthetic=true to run the synthetic fallback."
                     )
                 }
