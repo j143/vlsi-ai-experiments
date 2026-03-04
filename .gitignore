@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.env
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Datasets (generated — do not commit large files)
+datasets/*.csv
+datasets/*.parquet
+datasets/*.npy
+# Keep README in datasets/
+!datasets/README.md
+
+# Results (generated — do not commit large outputs)
+results/*.json
+results/*.png
+results/*.pdf
+results/*.html
+# Keep README in results/
+!results/README.md
+
+# Model checkpoints (can be large)
+ml/checkpoints/
+layout/data/*.npy
+
+# ngspice temporary files
+*.raw
+*.log
+*.out
+*.txt.tmp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp

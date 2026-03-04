@@ -1,0 +1,74 @@
+# bandgap/specs.yaml
+#
+# Bandgap Reference Design Specifications
+# =========================================
+# These specs define the pass/fail criteria for the optimizer and evaluation scripts.
+# Units are SI throughout (V, A, dB, ppm/°C, µs).
+#
+# To add a new spec:
+#   1. Add a key under the appropriate category.
+#   2. Add the corresponding extraction logic in bandgap/runner.py.
+#   3. Add a test in tests/test_bandgap_runner.py.
+#
+# Do NOT silently relax constraints — add a comment explaining any change.
+
+# ---------------------------------------------------------------------------
+# DC Output Voltage
+# ---------------------------------------------------------------------------
+vref:
+  target_V: 1.200          # Target reference voltage [V]
+  tolerance_V: 0.010       # Allowed deviation from target (±10 mV)
+  measurement_node: "VE1"  # ngspice node name where Vref is measured
+
+# ---------------------------------------------------------------------------
+# Temperature Coefficient
+# ---------------------------------------------------------------------------
+temperature_coefficient:
+  max_ppm_C: 30            # Maximum |TC| over full temperature range [ppm/°C]
+  # TC = (Vref_max - Vref_min) / (Vref_nom * delta_T) * 1e6
+  temp_range_C: [-40, 125] # Temperature corners for TC calculation
+
+# ---------------------------------------------------------------------------
+# Power Supply Rejection Ratio (PSRR)
+# ---------------------------------------------------------------------------
+psrr:
+  min_dc_dB: 60            # Minimum PSRR at DC [dB]
+  min_1kHz_dB: 40          # Minimum PSRR at 1 kHz [dB]
+  # TODO(human): add measurement frequency points relevant to your application
+
+# ---------------------------------------------------------------------------
+# Line Regulation
+# ---------------------------------------------------------------------------
+line_regulation:
+  max_mV_per_V: 5.0        # Maximum Vref shift per 1 V change in VDD [mV/V]
+  vdd_range_V: [1.62, 1.98] # VDD sweep range (±10% of 1.8 V nominal)
+
+# ---------------------------------------------------------------------------
+# Load Regulation
+# ---------------------------------------------------------------------------
+load_regulation:
+  max_mV_per_mA: 1.0       # Maximum Vref shift per 1 mA load current [mV/mA]
+  iload_range_mA: [0, 1.0] # Load current sweep range [mA]
+
+# ---------------------------------------------------------------------------
+# Quiescent Current
+# ---------------------------------------------------------------------------
+quiescent_current:
+  max_uA: 50               # Maximum quiescent (no-load) current from VDD [µA]
+
+# ---------------------------------------------------------------------------
+# Startup
+# ---------------------------------------------------------------------------
+startup:
+  max_us: 10.0             # Maximum time to reach within tolerance of Vref [µs]
+
+# ---------------------------------------------------------------------------
+# Analog Sanity Checks (physical constraints — NEVER relax without sign-off)
+# ---------------------------------------------------------------------------
+sanity_checks:
+  min_headroom_V: 0.1      # Minimum VDS/VCE headroom for any device [V]
+  min_ptat_swing_mV: 40    # Minimum PTAT voltage swing (VT*ln(N)) [mV]
+                           # Ensures robust TC cancellation
+  max_bjt_collector_current_uA: 100  # Per-BJT max collector current [µA]
+  min_gain_margin_dB: 10   # Minimum gain margin of the feedback loop [dB]
+  min_phase_margin_deg: 45 # Minimum phase margin of the feedback loop [°]

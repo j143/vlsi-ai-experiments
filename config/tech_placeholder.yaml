@@ -1,0 +1,128 @@
+# config/tech_placeholder.yaml
+#
+# Technology / PDK Parameter Placeholders
+# =========================================
+# This file collects ALL process-specific parameters in one place so that:
+#   - No PDK values are hardcoded in Python or SPICE files.
+#   - A human engineer can fill in real values for their target process.
+#   - AI agents can reference this file for valid parameter ranges.
+#
+# HOW TO USE:
+#   1. Search for every "TODO(human):" comment below.
+#   2. Replace the placeholder value with the actual PDK value.
+#   3. Cite the source (PDK name, version, file) in the comment.
+#
+# CURRENTLY CONFIGURED FOR: *** ILLUSTRATIVE PLACEHOLDER — NOT REAL PDK DATA ***
+# For a real design, replace with values from an open-source PDK such as:
+#   - SkyWater SKY130 (https://github.com/google/skywater-pdk)
+#   - GlobalFoundries GF180MCU (https://github.com/google/gf180mcu-pdk)
+#   - IHP SG13G2 (https://github.com/IHP-GmbH/IHP-Open-PDK)
+
+pdk:
+  name: "placeholder"          # TODO(human): replace with actual PDK name (e.g., "sky130")
+  version: "0.0.0"             # TODO(human): replace with PDK version string
+  reference: ""                # TODO(human): URL or citation for the PDK
+
+# ---------------------------------------------------------------------------
+# Supply voltages
+# ---------------------------------------------------------------------------
+supply:
+  vdd_nom_V: 1.8              # TODO(human): nominal VDD in volts
+  vdd_min_V: 1.62             # TODO(human): minimum VDD (e.g., -10% of nominal)
+  vdd_max_V: 1.98             # TODO(human): maximum VDD (e.g., +10% of nominal)
+  vss_V: 0.0                  # Ground reference
+
+# ---------------------------------------------------------------------------
+# Temperature corners
+# ---------------------------------------------------------------------------
+temperature:
+  nom_C: 27                   # Nominal simulation temperature (°C)
+  min_C: -40                  # Cold corner
+  max_C: 125                  # Hot corner
+  corners: [-40, 27, 85, 125] # Temperature points for sweeps
+
+# ---------------------------------------------------------------------------
+# MOSFET parameters (NMOS and PMOS)
+# These are ILLUSTRATIVE ONLY — do NOT use for real silicon.
+# ---------------------------------------------------------------------------
+mosfet:
+  nmos:
+    model_name: "nmos_placeholder"  # TODO(human): replace with PDK model card name
+    vth0_V: 0.45                    # TODO(human): threshold voltage at zero bias [V]
+    tox_m: 4.0e-9                   # TODO(human): gate oxide thickness [m]
+    lambda_inv_V: 20.0              # TODO(human): channel-length modulation 1/λ [V]
+    mu_n_m2_Vs: 300e-4              # TODO(human): electron mobility [m²/V·s]
+    min_W_um: 0.42                  # TODO(human): minimum drawn width [µm]
+    min_L_um: 0.15                  # TODO(human): minimum drawn length [µm]
+  pmos:
+    model_name: "pmos_placeholder"  # TODO(human): replace with PDK model card name
+    vth0_V: -0.45                   # TODO(human): threshold voltage at zero bias [V]
+    tox_m: 4.0e-9                   # TODO(human): gate oxide thickness [m]
+    lambda_inv_V: 15.0              # TODO(human): channel-length modulation 1/λ [V]
+    mu_p_m2_Vs: 100e-4              # TODO(human): hole mobility [m²/V·s]
+    min_W_um: 0.42                  # TODO(human): minimum drawn width [µm]
+    min_L_um: 0.15                  # TODO(human): minimum drawn length [µm]
+
+# ---------------------------------------------------------------------------
+# BJT / parasitic NPN parameters
+# ---------------------------------------------------------------------------
+bjt:
+  npn:
+    model_name: "npn_placeholder"   # TODO(human): replace with PDK NPN model name
+    is_A: 1.0e-17                   # TODO(human): saturation current [A]
+    bf: 100.0                       # TODO(human): forward current gain (β)
+    vaf_V: 50.0                     # TODO(human): forward Early voltage [V]
+    rb_ohm: 100.0                   # TODO(human): base resistance [Ω]
+    emitter_area_um2: 1.0           # TODO(human): unit emitter area [µm²]
+    # Emitter scaling: Is scales with area; set ratio N = Q2_area / Q1_area
+    ratio_N: 8                      # PTAT BJT area ratio (Q2 emitter area / Q1 area)
+                                    # Common choice: 8 (gives ~54 mV PTAT at 300 K)
+
+# ---------------------------------------------------------------------------
+# Resistor parameters
+# ---------------------------------------------------------------------------
+resistor:
+  high_res:
+    model_name: "res_high_placeholder"  # TODO(human): e.g., nwell resistor or ppolysilicon
+    sheet_resistance_ohm_sq: 1000.0     # TODO(human): sheet resistance [Ω/□]
+    tc1_ppm_C: 3000                     # TODO(human): first-order tempco [ppm/°C]
+    tc2_ppm_C2: 5                       # TODO(human): second-order tempco [ppm/°C²]
+    min_width_um: 0.42                  # TODO(human): minimum width [µm]
+  low_res:
+    model_name: "res_low_placeholder"   # TODO(human): e.g., metal or n+ diffusion
+    sheet_resistance_ohm_sq: 50.0       # TODO(human): sheet resistance [Ω/□]
+    tc1_ppm_C: 2500                     # TODO(human): first-order tempco [ppm/°C]
+    min_width_um: 0.42                  # TODO(human): minimum width [µm]
+
+# ---------------------------------------------------------------------------
+# Layout design rules (minimum / typical — ILLUSTRATIVE ONLY)
+# ---------------------------------------------------------------------------
+design_rules:
+  metal1:
+    min_width_um: 0.14          # TODO(human): M1 minimum width [µm]
+    min_space_um: 0.14          # TODO(human): M1 minimum spacing [µm]
+    min_enclosure_um: 0.06      # TODO(human): M1 enclosure of via [µm]
+  via1:
+    size_um: 0.15               # TODO(human): via size [µm]
+    min_space_um: 0.17          # TODO(human): via-to-via spacing [µm]
+  diffusion:
+    min_width_um: 0.15          # TODO(human): minimum diffusion width [µm]
+    min_space_um: 0.27          # TODO(human): diffusion-to-diffusion spacing [µm]
+  poly:
+    min_width_um: 0.15          # TODO(human): poly minimum width [µm]
+    min_space_um: 0.21          # TODO(human): poly spacing [µm]
+
+# ---------------------------------------------------------------------------
+# Bandgap reference target specs (used by optimizer objective function)
+# ---------------------------------------------------------------------------
+# These are reasonable targets for a 1.8 V CMOS bandgap reference.
+# Adjust as needed for your process and application.
+bandgap_specs:
+  vref_target_V: 1.200         # Target output voltage [V]
+  vref_tolerance_V: 0.010      # ±10 mV tolerance band
+  tc_max_ppm_C: 30             # Max temperature coefficient [ppm/°C]
+  psrr_min_dB: 60              # Min PSRR at DC [dB]
+  line_reg_max_mV_V: 5.0       # Max line regulation [mV/V of VDD]
+  load_reg_max_mV_mA: 1.0      # Max load regulation [mV/mA]
+  startup_max_us: 10.0         # Max startup time [µs]
+  quiescent_current_max_uA: 50 # Max quiescent current [µA]
