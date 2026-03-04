@@ -113,6 +113,27 @@ class TestBayesianOptimizerSynthetic:
         if result.best_vref_V is not None:
             assert 0.5 < result.best_vref_V < 3.5
 
+    def test_top_candidates_is_list(self, tmp_path):
+        result = self._run_small_opt(tmp_path)
+        assert isinstance(result.top_candidates, list)
+
+    def test_top_candidates_all_spec_passing(self, tmp_path):
+        result = self._run_small_opt(tmp_path)
+        for c in result.top_candidates:
+            assert c.get("spec_vref_pass") is True
+
+    def test_top_k_candidates_respects_limit(self, tmp_path):
+        result = self._run_small_opt(tmp_path)
+        assert len(result.top_k_candidates(k=2)) <= 2
+
+    def test_top_candidates_in_json(self, tmp_path):
+        self._run_small_opt(tmp_path)
+        json_file = list(tmp_path.glob("bo_run_*.json"))[0]
+        with open(json_file) as f:
+            data = json.load(f)
+        assert "top_candidates" in data
+        assert isinstance(data["top_candidates"], list)
+
 
 # ---------------------------------------------------------------------------
 # Plot helpers smoke tests
