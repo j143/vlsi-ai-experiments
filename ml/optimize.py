@@ -168,7 +168,7 @@ class BayesianOptimizer:
     def __init__(
         self,
         runner: Any,
-        budget: int = 30,
+        budget: int = 50,
         n_init: int = 10,
         n_candidates: int = 1000,
         xi: float = 0.01,
