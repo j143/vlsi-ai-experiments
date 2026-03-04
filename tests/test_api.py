@@ -130,3 +130,22 @@ class TestOptimize:
         assert "event: progress" in body
         assert "event: final" in body
         assert "event: done" in body
+
+
+class TestLayoutPreview:
+    def test_layout_preview_returns_expected_keys(self, client):
+        resp = client.get("/api/layout/preview?seed=1&patch_size=32")
+        assert resp.status_code == 200
+        data = resp.get_json()
+
+        for key in ("patch_size", "n_layers", "layer_map", "patch", "drc"):
+            assert key in data
+
+    def test_layout_preview_patch_shape_matches_metadata(self, client):
+        resp = client.get("/api/layout/preview?seed=2&patch_size=24")
+        data = resp.get_json()
+
+        assert data["patch_size"] == 24
+        assert len(data["patch"]) == data["n_layers"]
+        assert len(data["patch"][0]) == data["patch_size"]
+        assert len(data["patch"][0][0]) == data["patch_size"]

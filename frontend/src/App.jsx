@@ -312,49 +312,70 @@ function ConvergenceChart({ data }) {
 }
 
 // Simple layout mock (SVG floorplan)
-function LayoutViewer({ layer }) {
-  const layerColorMap = {
-    all: ['#1d4ed8', '#15803d', '#b45309', '#7c3aed'],
-    metal1: ['#1d4ed8'],
-    diffusion: ['#15803d'],
-    poly: ['#b45309'],
-    via: ['#7c3aed'],
+function LayoutViewer({ layer, layoutData }) {
+  const layerColors = {
+    diff: '#15803d',
+    poly: '#b45309',
+    contact: '#7c3aed',
+    metal1: '#1d4ed8',
+    via1: '#a855f7',
+    metal2: '#0ea5e9',
+    nwell: '#f59e0b',
+    pwell: '#f97316',
   };
-  const cols = layerColorMap[layer] || layerColorMap.all;
 
-  const cells = [
-    { x: 20, y: 20, w: 80, h: 40, label: 'M1/M2', layerIdx: 0 },
-    { x: 120, y: 20, w: 60, h: 40, label: 'Q1', layerIdx: 1 },
-    { x: 200, y: 20, w: 60, h: 40, label: 'Q2', layerIdx: 1 },
-    { x: 20, y: 80, w: 100, h: 35, label: 'R1', layerIdx: 2 },
-    { x: 140, y: 80, w: 50, h: 35, label: 'R2', layerIdx: 2 },
-    { x: 210, y: 80, w: 50, h: 35, label: 'C1', layerIdx: 3 },
-    { x: 20, y: 135, w: 240, h: 20, label: 'GND Rail', layerIdx: 0 },
-  ];
+  const patch = layoutData?.patch;
+  const layerMap = layoutData?.layer_map || {};
+  if (!patch || !patch.length) {
+    return (
+      <div style={{
+        backgroundColor: '#020617', borderRadius: '0.375rem', border: '1px solid #334155',
+        minHeight: '220px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#64748b',
+      }}>
+        Layout preview unavailable
+      </div>
+    );
+  }
+
+  const patchSize = patch[0].length;
+  const cellSize = 7;
+  const layerEntries = Object.entries(layerMap).map(([idx, name]) => ({ idx: Number(idx), name }));
+  const selectedLayer = layerEntries.find((entry) => entry.name === layer);
+
+  const cells = [];
+  for (let y = 0; y < patchSize; y += 1) {
+    for (let x = 0; x < patchSize; x += 1) {
+      let color = null;
+      if (layer === 'all') {
+        const hit = layerEntries.find((entry) => patch[entry.idx]?.[y]?.[x] === 1);
+        if (hit) color = layerColors[hit.name] || '#38bdf8';
+      } else if (selectedLayer && patch[selectedLayer.idx]?.[y]?.[x] === 1) {
+        color = layerColors[selectedLayer.name] || '#38bdf8';
+      }
+
+      if (color) {
+        cells.push(
+          <rect
+            key={`${x}-${y}`}
+            x={x * cellSize}
+            y={y * cellSize}
+            width={cellSize - 0.5}
+            height={cellSize - 0.5}
+            fill={color}
+            opacity="0.85"
+          />
+        );
+      }
+    }
+  }
 
   return (
     <svg
       width="100%"
-      viewBox="0 0 290 175"
+      viewBox={`0 0 ${patchSize * cellSize} ${patchSize * cellSize}`}
       style={{ backgroundColor: '#020617', borderRadius: '0.375rem', border: '1px solid #334155' }}
     >
-      {Array.from({ length: 10 }).map((_, i) => (
-        <line key={`h${i}`} x1={0} x2={290} y1={i * 20} y2={i * 20} stroke="#0f172a" strokeWidth="0.5" />
-      ))}
-      {Array.from({ length: 15 }).map((_, i) => (
-        <line key={`v${i}`} x1={i * 20} x2={i * 20} y1={0} y2={175} stroke="#0f172a" strokeWidth="0.5" />
-      ))}
-      {cells.map((c) => {
-        const fill = cols[c.layerIdx % cols.length];
-        return (
-          <g key={c.label}>
-            <rect x={c.x} y={c.y} width={c.w} height={c.h}
-              fill={fill + '40'} stroke={fill} strokeWidth="1.2" rx="2" />
-            <text x={c.x + c.w / 2} y={c.y + c.h / 2 + 4}
-              fill="#f8fafc" fontSize="9" textAnchor="middle">{c.label}</text>
-          </g>
-        );
-      })}
+      {cells}
     </svg>
   );
 }
@@ -488,8 +509,9 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
   );
 }
 
-function LayoutTab({ layer, setLayer }) {
-  const layerOptions = ['all', 'metal1', 'diffusion', 'poly', 'via'];
+function LayoutTab({ layer, setLayer, layoutData, layoutError }) {
+  const layerNames = layoutData?.layer_map ? Object.values(layoutData.layer_map) : ['diff', 'poly', 'contact', 'metal1'];
+  const layerOptions = ['all', ...layerNames];
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 240px', gap: '1rem' }}>
@@ -510,11 +532,12 @@ function LayoutTab({ layer, setLayer }) {
             </button>
           ))}
         </div>
-        <LayoutViewer layer={layer} />
+        {layoutError && <span style={{ ...S.label, color: '#fbbf24' }}>Layout API warning: {layoutError}</span>}
+        <LayoutViewer layer={layer} layoutData={layoutData} />
         <div style={{ display: 'flex', gap: '1rem' }}>
-          <span style={S.label}>DRC: <strong style={{ color: '#6ee7b7' }}>0 errors</strong></span>
-          <span style={S.label}>LVS: <strong style={{ color: '#6ee7b7' }}>clean</strong></span>
-          <span style={S.label}>Area: <strong style={{ color: '#f8fafc' }}>42.6 µm²</strong></span>
+          <span style={S.label}>DRC: <strong style={{ color: '#f8fafc' }}>{layoutData?.drc?.n_violations ?? '—'} violations</strong></span>
+          <span style={S.label}>Pass Rate: <strong style={{ color: '#6ee7b7' }}>{layoutData?.drc?.pass_rate != null ? `${(layoutData.drc.pass_rate * 100).toFixed(0)}%` : '—'}</strong></span>
+          <span style={S.label}>Patch: <strong style={{ color: '#f8fafc' }}>{layoutData?.patch_size ?? '—'}×{layoutData?.patch_size ?? '—'}</strong></span>
         </div>
       </div>
 
@@ -522,10 +545,14 @@ function LayoutTab({ layer, setLayer }) {
         <div style={S.card()}>
           <div style={S.cardTitle}><Database size={13} />Layer Legend</div>
           {[
-            { color: '#1d4ed8', label: 'Metal 1 / Power Rail' },
-            { color: '#15803d', label: 'Active / Diffusion' },
-            { color: '#b45309', label: 'Poly / Gate' },
-            { color: '#7c3aed', label: 'Via / Contact' },
+            { color: '#15803d', label: 'diff' },
+            { color: '#b45309', label: 'poly' },
+            { color: '#7c3aed', label: 'contact' },
+            { color: '#1d4ed8', label: 'metal1' },
+            { color: '#a855f7', label: 'via1' },
+            { color: '#0ea5e9', label: 'metal2' },
+            { color: '#f59e0b', label: 'nwell' },
+            { color: '#f97316', label: 'pwell' },
           ].map(({ color, label }) => (
             <div key={label} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', marginBottom: '0.375rem' }}>
               <div style={{ width: '14px', height: '14px', backgroundColor: color + '60', border: `1px solid ${color}`, borderRadius: '2px' }} />
@@ -713,6 +740,8 @@ export default function App() {
   const [serverStatus, setServerStatus] = useState({ ok: null, ngspice_available: null });
   const [optimResult, setOptimResult] = useState(null);
   const [apiError, setApiError] = useState(null);
+  const [layoutData, setLayoutData] = useState(null);
+  const [layoutError, setLayoutError] = useState(null);
   const logRef = useRef(null);
   const streamRef = useRef(null);
 
@@ -722,6 +751,11 @@ export default function App() {
       .then((r) => r.json())
       .then((data) => setServerStatus(data))
       .catch(() => setServerStatus({ ok: false, ngspice_available: false }));
+
+    fetch('/api/layout/preview?seed=42&patch_size=32')
+      .then((r) => r.json())
+      .then((data) => setLayoutData(data))
+      .catch(() => setLayoutError('Could not load layout preview'));
   }, []);
 
   // Scroll log panel to bottom when new results arrive
@@ -942,7 +976,12 @@ export default function App() {
             />
           )}
           {activeTab === 'layout' && (
-            <LayoutTab layer={layoutLayer} setLayer={setLayoutLayer} />
+            <LayoutTab
+              layer={layoutLayer}
+              setLayer={setLayoutLayer}
+              layoutData={layoutData}
+              layoutError={layoutError}
+            />
           )}
           {activeTab === 'verification' && <VerificationTab />}
           {activeTab === 'logs' && <LogsTab logLines={liveLogs} logRef={logRef} />}
