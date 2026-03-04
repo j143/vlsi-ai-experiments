@@ -434,7 +434,8 @@ def _plot_convergence(result: OptimizationResult, results_dir: Path) -> None:
 
     fig, ax = plt.subplots(figsize=(7, 4))
     ax.plot(iters, errors, marker="o", markersize=3, linewidth=1.5, label="Best |Vref − target|")
-    ax.axhline(tol, color="red", linestyle="--", linewidth=1, label=f"Tolerance (±{tol*1000:.0f} mV)")
+    ax.axhline(tol, color="red", linestyle="--", linewidth=1,
+               label=f"Tolerance (±{tol*1000:.0f} mV)")
     ax.set_xlabel("BO Iteration")
     ax.set_ylabel("|Vref − target| [V]")
     ax.set_title("Bayesian Optimization Convergence")
@@ -668,4 +669,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
