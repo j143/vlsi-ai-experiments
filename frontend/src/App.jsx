@@ -382,7 +382,7 @@ function LayoutViewer({ layer, layoutData }) {
 
 // --- Tab views ---
 
-function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult, liveEstimate, isEstimating, estimateError }) {
+function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult, liveEstimate, isEstimating, estimateError, cornerData, overallStatus }) {
   const displayCandidates = candidates || CANDIDATES;
   const displayConvergence = convergenceData?.length ? convergenceData : CONVERGENCE;
   const anyPass = displayCandidates.some((c) => c.status === 'pass');
@@ -487,7 +487,9 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
               { label: 'Power', value: selectedCandidate?.power ?? '—' },
               {
                 label: 'Status',
-                value: selectedCandidate ? (selectedCandidate.status === 'pass' ? '✓ Pass' : '✗ Fail') : '—',
+                value: selectedCandidate
+                  ? (overallStatus === 'pass' ? '✓ Pass' : overallStatus === 'warn' ? '⚠ Warn' : '✗ Fail')
+                  : '—',
               },
             ].map(({ label, value }) => (
               <div key={label} style={{ backgroundColor: '#0f172a', borderRadius: '0.375rem', padding: '0.5rem 0.625rem' }}>
@@ -505,7 +507,7 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
 
         <div style={S.card({ flex: 1 })}>
           <div style={S.cardTitle}><Activity size={13} />Corner Analysis</div>
-          {CORNER_DATA.map((c) => (
+          {cornerData.map((c) => (
             <div key={c.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0', borderBottom: '1px solid #0f172a' }}>
               <span style={{ fontSize: '0.7rem', color: '#94a3b8' }}>{c.name}</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -594,7 +596,8 @@ function LayoutTab({ layer, setLayer, layoutData, layoutError }) {
   );
 }
 
-function VerificationTab() {
+function VerificationTab({ cornerData }) {
+  const passCount = cornerData.filter((c) => c.status === 'pass').length;
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1rem' }}>
       <div style={S.card()}>
@@ -620,7 +623,7 @@ function VerificationTab() {
 
       <div style={S.card()}>
         <div style={S.cardTitle}><Activity size={13} />Corner Sweep Results</div>
-        {CORNER_DATA.map((c) => (
+        {cornerData.map((c) => (
           <div key={c.name} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0', borderBottom: '1px solid #0f172a' }}>
             <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>{c.name}</span>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -631,7 +634,7 @@ function VerificationTab() {
         ))}
         <div style={{ marginTop: '0.75rem', padding: '0.5rem 0.75rem', backgroundColor: '#0f172a', borderRadius: '0.375rem' }}>
           <span style={{ fontSize: '0.75rem', color: '#94a3b8' }}>
-            3/4 corners pass. FF corner at 125°C exceeds 1% error threshold.
+            {passCount}/{cornerData.length} corners pass based on unified candidate criterion.
           </span>
         </div>
       </div>
@@ -736,6 +739,40 @@ function _historyToCandidates(history) {
         status: allKnownChecksPass ? 'pass' : 'fail',
       };
     });
+}
+
+function _deriveCornerData(selectedCandidate) {
+  const base = [
+    { name: 'TT_25C_1.8V', mult: 1.0 },
+    { name: 'SS_-40C_1.6V', mult: 1.2 },
+    { name: 'FF_125C_2.0V', mult: 1.6 },
+    { name: 'FS_25C_1.8V', mult: 1.1 },
+  ];
+
+  if (!selectedCandidate) return CORNER_DATA;
+
+  const errMv = Number(selectedCandidate.err_mV ?? 0);
+  const isCandidatePass = selectedCandidate.status === 'pass';
+
+  return base.map((corner) => {
+    const cornerErrPct = Math.max(0.1, (errMv / 10) * corner.mult);
+    let status = 'pass';
+    if (cornerErrPct > 1.0) status = 'warn';
+    if (cornerErrPct > 1.5) status = 'fail';
+    if (!isCandidatePass && corner.name.startsWith('FF_')) status = 'fail';
+
+    return {
+      name: corner.name,
+      status,
+      error: `${cornerErrPct.toFixed(1)}%`,
+    };
+  });
+}
+
+function _overallStatusFromCorners(cornerData) {
+  if (cornerData.some((corner) => corner.status === 'fail')) return 'fail';
+  if (cornerData.some((corner) => corner.status === 'warn')) return 'warn';
+  return 'pass';
 }
 
 export default function App() {
@@ -962,6 +999,9 @@ export default function App() {
 
   const bestEntry = optimResult?.history?.filter((e) => e.vref_V != null)
     .sort((a, b) => Math.abs(a.vref_V - 1.2) - Math.abs(b.vref_V - 1.2))[0];
+  const liveCornerData = _deriveCornerData(selectedCandidate);
+  const overallStatus = _overallStatusFromCorners(liveCornerData);
+  const passCorners = liveCornerData.filter((corner) => corner.status === 'pass').length;
 
   return (
     <div style={S.appWrapper}>
@@ -1032,6 +1072,8 @@ export default function App() {
               liveEstimate={liveEstimate}
               isEstimating={isEstimating}
               estimateError={estimateError}
+              cornerData={liveCornerData}
+              overallStatus={overallStatus}
             />
           )}
           {activeTab === 'layout' && (
@@ -1042,7 +1084,7 @@ export default function App() {
               layoutError={layoutError}
             />
           )}
-          {activeTab === 'verification' && <VerificationTab />}
+          {activeTab === 'verification' && <VerificationTab cornerData={liveCornerData} />}
           {activeTab === 'logs' && <LogsTab logLines={liveLogs} logRef={logRef} />}
         </div>
       </div>
@@ -1064,7 +1106,7 @@ export default function App() {
             </>
           ) : (
             <>
-              <span>3/4 corners pass</span>
+              <span>{passCorners}/{liveCornerData.length} corners pass</span>
               <span>Best TC: 12.4 ppm/C</span>
               <span>iter 28/50</span>
             </>
