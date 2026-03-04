@@ -242,16 +242,19 @@ def optimize():
     vref_target = opt.specs["vref"]["target_V"]
     convergence = []
     best_so_far = float("inf")
+    best_std_so_far = None
     for entry in result.history:
         vref = entry.get("vref_V")
         if vref is not None:
             err = abs(vref - vref_target)
             if err < best_so_far:
                 best_so_far = err
+                best_std_so_far = entry.get("pred_error_std_V")
         convergence.append(
             {
                 "iter": entry.get("iteration", len(convergence)),
                 "best_error_V": best_so_far if best_so_far < float("inf") else None,
+                "best_error_std_V": best_std_so_far,
             }
         )
 
@@ -308,16 +311,19 @@ def optimize_stream():
                 vref_target = opt.specs["vref"]["target_V"]
                 convergence = []
                 best_so_far = float("inf")
+                best_std_so_far = None
                 for entry in result.history:
                     vref = entry.get("vref_V")
                     if vref is not None:
                         err = abs(vref - vref_target)
                         if err < best_so_far:
                             best_so_far = err
+                            best_std_so_far = entry.get("pred_error_std_V")
                     convergence.append(
                         {
                             "iter": entry.get("iteration", len(convergence)),
                             "best_error_V": best_so_far if best_so_far < float("inf") else None,
+                            "best_error_std_V": best_std_so_far,
                         }
                     )
 
