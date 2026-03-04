@@ -2,6 +2,43 @@
 
 Track progress by tagging tasks: `[analog]`, `[ML]`, `[layout]`, `[infra]`.
 
+Status legend:
+- ✅ Complete
+- 🟡 In progress / partial
+- ⬜ Not started
+
+---
+
+## Current Snapshot (Mar 2026)
+
+- ✅ Milestone 0 complete (repo scaffold, CI, core modules)
+- 🟡 Product/UI integration sprint delivered in PR #13 (`ui-updates`)
+- 🟡 Milestone 1 partially complete (runner/sweep exist, real-PDK validation pending)
+- 🟡 Milestone 2 partially complete (surrogate + BO loop implemented; benchmark quality work pending)
+- ⬜ Milestones 3–5 mostly pending
+
+---
+
+## Product Integration Sprint — UI Review + High-Value Activities ✅
+*Goal: Execute concrete UI/backend tasks from `ui-review.md` and `High-value-next-steps.md`.*
+
+### Delivered
+- [x] `[infra]` Frontend connected to live backend API (`api/server.py`)
+- [x] `[infra]` SSE optimizer streaming (`GET /api/optimize/stream`)
+- [x] `[infra]` Save Project + Export Netlist actions wired end-to-end
+- [x] `[infra]` API robustness: JSON parsing hardening + fallback API base + stream retry
+- [x] `[layout]` Layout tab backed by synthetic patch + DRC preview API
+- [x] `[ML]` Convergence UI clarity: axis semantics + uncertainty band rendering
+- [x] `[ML]` Selected candidate now shows PSRR and Iq from optimizer history
+- [x] `[ML]` Unified pass/fail criterion across optimizer summary and corner panel
+- [x] `[infra]` Project nav controls wired (datasets/netlists listing, top-bar actions)
+- [x] `[ML]` Convergence tuning pass (bounds, budget defaults, GP tuning)
+- [x] `[analog]` Real ngspice-backed flow is default; synthetic fallback is explicit opt-in
+
+### Follow-up validation (remaining)
+- [ ] `[ML]` Prove convergence consistency on real ngspice runs across multiple seeds
+- [ ] `[analog]` Publish reproducible pass-rate benchmark from real runs
+
 ---
 
 ## Milestone 0 — Repository Skeleton ✅
@@ -15,104 +52,80 @@ Track progress by tagging tasks: `[analog]`, `[ML]`, `[layout]`, `[infra]`.
 - [x] `[analog]` Add minimal bandgap SPICE netlist (`bandgap_simple.sp`)
 - [x] `[analog]` Add ngspice runner (`bandgap/runner.py`)
 - [x] `[ML]` Add dataset generation script (`data_gen/sweep_bandgap.py`)
-- [x] `[ML]` Add surrogate model stub (`ml/surrogate.py`)
+- [x] `[ML]` Add surrogate model module (`ml/surrogate.py`)
 - [x] `[layout]` Add layout data stub and patch model skeleton
 
 ---
 
-## UI Review + High-Value Activities (Mar 2026)
-*Goal: Track the concrete product/UX/backend tasks identified in `ui-review.md` and `High-value-next-steps.md`.*
-
-### Delivered in PR #13 (`ui-updates`)
-- [x] `[infra]` Real backend API wired to frontend (implemented with Flask in `api/server.py`)
-- [x] `[infra]` Live optimizer progress streaming via SSE (`/api/optimize/stream`)
-- [x] `[infra]` Save Project + Export Netlist actions wired end-to-end
-- [x] `[infra]` Runtime hardening for API JSON/stream failures (fallback base + retry)
-- [x] `[layout]` Layout Viewer wired to synthetic patch + DRC preview API
-- [x] `[ML]` Convergence diagnostics improved in UI (axis semantics + uncertainty band)
-- [x] `[ML]` Candidate metrics wiring in UI (PSRR/Iq displayed in Selected panel)
-- [x] `[ML]` Unified pass/fail criterion between optimizer summary and corner table
-- [x] `[infra]` Functional project/top-bar controls (datasets/netlists listing, history, settings, branch)
-- [x] `[ML]` Initial convergence tuning pass (wider search bounds, higher budget defaults, surrogate/kernel tuning)
-- [x] `[analog]` Real ngspice-backed flow set as default; synthetic mode requires explicit opt-in
-
-### In progress / needs validation depth
-- [ ] `[ML]` Demonstrate consistent spec convergence against real ngspice runs (not only synthetic fallback)
-- [ ] `[analog]` Add reproducible benchmark report for pass-rate and convergence quality across seeds
-
-### Pending high-value items
-- [ ] `[analog]` Integrate real SKY130 PDK setup (library includes + validated tech values)
-- [ ] `[ML]` Implement multi-corner joint optimization objective (corner constraints in-loop, not only post-hoc)
-
----
-
-## Milestone 1 — MVP Bandgap Flow (manual sweep + logging)
-*Goal: Run a real sweep, collect data, and inspect results. No ML yet.*
+## Milestone 1 — Real-Data Bandgap Foundation 🟡
+*Goal: Produce trusted real-simulation dataset and baseline checks.*
 
 - [ ] `[analog]` Validate SPICE netlist against hand-calculated operating point
-- [ ] `[analog]` Add corner/temperature sweep to `data_gen/sweep_bandgap.py`
-- [ ] `[analog]` Log Vref, TC, PSRR, startup pass/fail per design point
-- [ ] `[analog]` Write `tests/test_ngspice_smoke.py` — checks simulator is found and netlist parses
-- [ ] `[ML]` Produce first CSV dataset from at least 50 SPICE runs
-- [ ] `[infra]` Add `results/` directory with example plots (gitignored for large files)
-- [ ] `[infra]` Update README with full quick-start instructions
+- [ ] `[analog]` Integrate real SKY130 (or selected open PDK) model includes in netlist flow
+- [ ] `[analog]` Add/verify corner + temperature sweep in `data_gen/sweep_bandgap.py`
+- [ ] `[analog]` Log Vref, TC, PSRR, Iq, startup pass/fail per design point
+- [ ] `[analog]` Add `tests/test_ngspice_smoke.py` for simulator presence + netlist parse
+- [ ] `[ML]` Produce and version first real dataset (≥ 50 valid SPICE points)
+- [ ] `[infra]` Add dataset provenance metadata (PDK, commit hash, sweep config)
+- [ ] `[infra]` Update README quick-start for real-simulation workflow
 
 ---
 
-## Milestone 2 — Surrogate v1 + Basic Optimizer Loop
-*Goal: Train first ML model, wrap in Bayesian optimizer, show simulation savings.*
+## Milestone 2 — Surrogate + Optimizer Quality Loop 🟡
+*Goal: Show measurable simulation savings with calibrated uncertainty.*
 
-- [ ] `[ML]` Train Gaussian Process surrogate on Milestone-1 dataset
-- [ ] `[ML]` Add uncertainty calibration check (reliability diagram)
-- [ ] `[ML]` Compare surrogate predictions vs. ngspice on held-out test set
-- [ ] `[ML]` Implement Bayesian optimization loop (`ml/optimize.py`)
-- [ ] `[ML]` Report: simulations required (BO vs. grid sweep), spec pass rate
-- [ ] `[ML]` Add `tests/test_surrogate.py` covering fit/predict/uncertainty paths
-- [ ] `[analog]` Verify optimizer respects all analog sanity checks (headroom, matching)
-- [ ] `[infra]` Add optimizer run to CI smoke test (tiny 5-point budget)
+- [x] `[ML]` Implement Bayesian optimization loop (`ml/optimize.py`)
+- [x] `[ML]` Add surrogate fit/predict/uncertainty test coverage (`tests/test_surrogate.py`)
+- [ ] `[ML]` Train GP surrogate on Milestone-1 real dataset
+- [ ] `[ML]` Add uncertainty calibration check (reliability / coverage)
+- [ ] `[ML]` Compare surrogate vs ngspice on held-out real test set
+- [ ] `[ML]` Add BO-vs-grid benchmark report (sim count, time, spec-pass rate)
+- [ ] `[analog]` Verify optimizer proposals satisfy analog sanity checks
+- [ ] `[infra]` Add tiny optimizer smoke path in CI (short budget)
 
 ---
 
-## Milestone 3 — Layout Patch Model v1
-*Goal: Self-supervised patch model that predicts contacts/vias in masked layout.*
+## Milestone 3 — Layout Patch Model v1 ⬜
+*Goal: Build and evaluate a self-supervised patch completion model.*
 
-- [ ] `[layout]` Collect or generate ≥ 500 training patches (synthetic or open-source)
+- [ ] `[layout]` Collect/generate ≥ 500 training patches (open/synthetic only)
 - [ ] `[layout]` Implement UNet encoder-decoder in `layout/patch_model.py`
 - [ ] `[layout]` Add self-supervised masking pre-training script
-- [ ] `[layout]` Add fine-tuning script for contact/via prediction task
-- [ ] `[layout]` Implement DRC rule checks for generated patterns
-- [ ] `[layout]` Add pattern similarity metric (IoU, pixel accuracy)
-- [ ] `[layout]` Add `tests/test_layout.py` covering data pipeline and model I/O
+- [ ] `[layout]` Add fine-tuning path for contact/via completion
+- [ ] `[layout]` Implement DRC rule checks for generated patches
+- [ ] `[layout]` Add similarity metrics (IoU, pixel accuracy)
+- [ ] `[layout]` Add tests covering data pipeline and model I/O
 
 ---
 
-## Milestone 4 — Evaluation + Comparison vs. Baseline
-*Goal: Quantify every claim. No demo without numbers.*
+## Milestone 4 — Quantitative Evaluation ⬜
+*Goal: Quantify all claims with reproducible experiments.*
 
-- [ ] `[ML]` End-to-end comparison: BO-assisted vs. grid sweep (simulation count, time, spec rate)
-- [ ] `[ML]` Failure mode analysis notebook: where does the surrogate fail?
-- [ ] `[layout]` DRC pass rate on AI-generated vs. human-designed patterns
-- [ ] `[layout]` Data-efficiency study: performance vs. training set size
-- [ ] `[analog]` Hand-tuned expert design vs. ML-suggested design comparison
-- [ ] `[infra]` Generate automated HTML/PDF report from `results/`
+- [ ] `[ML]` End-to-end BO-assisted vs grid-sweep comparison
+- [ ] `[ML]` Failure-mode analysis for surrogate errors
+- [ ] `[layout]` DRC pass-rate comparison: generated vs reference layouts
+- [ ] `[layout]` Data-efficiency sweep vs training-set size
+- [ ] `[analog]` Expert hand-tuned vs ML-suggested design comparison
+- [ ] `[infra]` Auto-generate consolidated HTML/PDF results report
 
 ---
 
-## Milestone 5 — Documentation + Onboarding
-*Goal: A new engineer can understand, run, and modify the flow in < 1 hour.*
+## Milestone 5 — Documentation + Onboarding ⬜
+*Goal: New contributor can run/modify flow in < 1 hour.*
 
-- [ ] `[infra]` Complete `CONTRIBUTING.md` with worked examples
-- [ ] `[infra]` Add `examples/` directory with Jupyter notebooks
+- [ ] `[infra]` Expand `CONTRIBUTING.md` with worked examples
+- [ ] `[infra]` Add `examples/` notebooks/scripts
 - [ ] `[infra]` Add architecture diagram to README
-- [ ] `[infra]` Add FAQ section covering common ngspice/PDK setup issues
-- [ ] `[analog]` Add design notes explaining bandgap topology choices
-- [ ] `[ML]` Add model card for each released surrogate checkpoint
+- [ ] `[infra]` Add FAQ for ngspice + PDK setup
+- [ ] `[analog]` Add design notes for bandgap topology choices
+- [ ] `[ML]` Add model card template for released surrogate checkpoints
 
 ---
 
 ## Future Ideas (not scheduled)
-- Multi-corner joint optimization (slow/fast/nominal simultaneously)
-- Mismatch/Monte Carlo integration in surrogate training
-- Layout-aware sizing (parasitics feedback from layout model)
-- Transfer learning across different bandgap topologies
-- Integration with KLayout for DRC scripting
+
+- Multi-corner joint optimization (optimize with corner constraints in-loop)
+- Mismatch / Monte Carlo integration in surrogate training
+- Layout-aware sizing with parasitic feedback
+- Transfer learning across bandgap topologies
+- KLayout integration for programmable DRC scripting
