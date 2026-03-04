@@ -134,8 +134,16 @@ class TestEvaluateSurrogate:
         X, y = _make_data()
         model.fit(X[:25], y[:25])
         metrics = evaluate_surrogate(model, X[25:], y[25:])
-        expected = {"r2", "rmse", "max_abs_error", "mean_std", "within_1sigma_frac"}
+        expected = {"mae", "r2", "rmse", "max_abs_error", "mean_std", "within_1sigma_frac",
+                    "coverage_90"}
         assert expected.issubset(metrics.keys())
+
+    def test_mae_is_non_negative(self):
+        model = RandomForestSurrogate(n_estimators=10)
+        X, y = _make_data()
+        model.fit(X[:25], y[:25])
+        metrics = evaluate_surrogate(model, X[25:], y[25:])
+        assert metrics["mae"] >= 0
 
     def test_rmse_is_non_negative(self):
         model = RandomForestSurrogate(n_estimators=10)
@@ -151,11 +159,19 @@ class TestEvaluateSurrogate:
         metrics = evaluate_surrogate(model, X[25:], y[25:])
         assert 0.0 <= metrics["within_1sigma_frac"] <= 1.0
 
+    def test_coverage_90_between_0_and_1(self):
+        model = GaussianProcessSurrogate(n_restarts=1)
+        X, y = _make_data()
+        model.fit(X[:25], y[:25])
+        metrics = evaluate_surrogate(model, X[25:], y[25:])
+        assert 0.0 <= metrics["coverage_90"] <= 1.0
+
 
 class TestGenerateSyntheticData:
     def test_returns_dataframe_with_expected_columns(self):
         df = _generate_synthetic_data(n=20)
-        for col in ["N", "R1", "R2", "W_P", "L_P", "vref_V", "iq_uA", "error"]:
+        for col in ["N", "R1", "R2", "W_P", "L_P", "vref_V", "tc_ppm_C", "psrr_dB",
+                    "iq_uA", "error"]:
             assert col in df.columns, f"Missing column: {col}"
 
     def test_correct_row_count(self):

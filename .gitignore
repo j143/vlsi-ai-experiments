@@ -26,6 +26,8 @@ datasets/*.parquet
 datasets/*.npy
 # Keep README in datasets/
 !datasets/README.md
+# Keep the committed reference dataset (analytical, < 1 MB) for pipeline bootstrapping
+!datasets/bandgap_sweep_real_sky130.csv
 
 # Results (generated — do not commit large outputs)
 results/*.json
@@ -57,3 +59,4 @@ frontend/dist/
 .vscode/
 .idea/
 *.swp
+results/projects/
