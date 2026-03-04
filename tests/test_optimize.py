@@ -8,10 +8,6 @@ integration path used by the Experiment 01 entry point.
 import json
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
-
-import numpy as np
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -19,7 +15,6 @@ from ml.optimize import (  # noqa: E402
     BayesianOptimizer,
     OptimizationResult,
     SyntheticBandgapRunner,
-    _expected_improvement,
     _plot_comparison,
     _plot_convergence,
 )

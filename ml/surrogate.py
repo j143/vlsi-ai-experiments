@@ -380,7 +380,7 @@ def main() -> None:
     parser.add_argument("--checkpoint-dir", default="ml/checkpoints",
                         help="Directory to save the fitted model checkpoint.")
     parser.add_argument("--model", choices=["gp", "rf"], default="gp",
-                        help="Surrogate model type: 'gp' (Gaussian Process) or 'rf' (Random Forest).")
+                        help="Surrogate model type: 'gp' (Gaussian Process) or 'rf' (RF).")
     parser.add_argument("--target", default="vref_V",
                         help="Target column to model (must exist in the sweep CSV).")
     parser.add_argument("--n-synthetic", type=int, default=200,
@@ -501,4 +501,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
