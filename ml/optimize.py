@@ -207,6 +207,7 @@ class BayesianOptimizer:
         n_sim = 0
         n_pass = 0
         best_error = np.inf
+        best_error_std = None
         best_params: dict[str, Any] = {}
 
         # Phase 1: LHS initialization
@@ -228,6 +229,7 @@ class BayesianOptimizer:
                     n_pass += 1
                 if err < best_error:
                     best_error = err
+                    best_error_std = entry.get("pred_error_std_V")
                     best_params = params
 
             if progress_callback is not None:
@@ -238,6 +240,7 @@ class BayesianOptimizer:
                         "n_spec_pass": n_pass,
                         "spec_pass_rate": n_pass / n_sim if n_sim else 0.0,
                         "best_error_V": best_error if best_error < np.inf else None,
+                        "best_error_std_V": best_error_std,
                     },
                 )
 
@@ -260,6 +263,7 @@ class BayesianOptimizer:
                     logger.warning("GP fit failed: %s. Falling back to random.", exc)
                     candidate_params = _make_lhs_samples(n_samples=1, rng=rng)[0]
                     acquisition_score = float("nan")
+                    predicted_error_std = None
                 else:
                     # Evaluate EI over random candidates
                     cand_samples = _make_lhs_samples(n_samples=self.n_candidates, rng=rng)
@@ -269,10 +273,12 @@ class BayesianOptimizer:
                     best_idx = int(np.argmax(ei))
                     candidate_params = cand_samples[best_idx]
                     acquisition_score = float(ei[best_idx])
+                    predicted_error_std = float(sigma[best_idx])
 
             entry = self._simulate_and_log(
                 candidate_params, iteration=n_sim, source="bo",
                 acquisition_score=acquisition_score if len(X_obs) >= 3 else float("nan"),
+                predicted_error_std_V=predicted_error_std if len(X_obs) >= 3 else None,
             )
             history.append(entry)
             n_sim += 1
@@ -285,6 +291,7 @@ class BayesianOptimizer:
                     n_pass += 1
                 if err < best_error:
                     best_error = err
+                    best_error_std = entry.get("pred_error_std_V")
                     best_params = candidate_params
                     logger.info(
                         "New best: vref=%.4f V, error=%.4f V (iter %d)",
@@ -299,6 +306,7 @@ class BayesianOptimizer:
                         "n_spec_pass": n_pass,
                         "spec_pass_rate": n_pass / n_sim if n_sim else 0.0,
                         "best_error_V": best_error if best_error < np.inf else None,
+                        "best_error_std_V": best_error_std,
                     },
                 )
 
@@ -335,6 +343,7 @@ class BayesianOptimizer:
         iteration: int,
         source: str,
         acquisition_score: float = float("nan"),
+        predicted_error_std_V: float | None = None,
     ) -> dict[str, Any]:
         """Run one simulation and return a log entry."""
         t0 = time.perf_counter()
@@ -355,6 +364,7 @@ class BayesianOptimizer:
             "spec_iq_pass": sim_result.get("spec_checks", {}).get("iq"),
             "spec_psrr_pass": sim_result.get("spec_checks", {}).get("psrr"),
             "acquisition_score": acquisition_score,
+            "pred_error_std_V": predicted_error_std_V,
             "sim_time_s": round(elapsed, 4),
             "error": sim_result.get("error") or "",
         }

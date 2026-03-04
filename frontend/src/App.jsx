@@ -275,13 +275,23 @@ function ConvergenceChart({ data }) {
   const iW = W - pad.l - pad.r;
   const iH = H - pad.t - pad.b;
   const maxIter = data[data.length - 1].iter;
-  const maxLoss = 0.9;
+  const maxLoss = Math.max(0.9, ...data.map((d) => (d.loss ?? 0) + (d.lossStd ?? 0)));
   const minLoss = 0;
   const xScale = (iter) => pad.l + (iter / maxIter) * iW;
   const yScale = (loss) => pad.t + (1 - (loss - minLoss) / (maxLoss - minLoss)) * iH;
   const pathD = data
     .map((d, i) => `${i === 0 ? 'M' : 'L'}${xScale(d.iter).toFixed(1)},${yScale(d.loss).toFixed(1)}`)
     .join(' ');
+  const bandUpper = data
+    .map((d) => ({ iter: d.iter, y: yScale((d.loss ?? 0) + (d.lossStd ?? 0)) }))
+    .map((p, i) => `${i === 0 ? 'M' : 'L'}${xScale(p.iter).toFixed(1)},${p.y.toFixed(1)}`)
+    .join(' ');
+  const bandLower = [...data]
+    .reverse()
+    .map((d) => ({ iter: d.iter, y: yScale(Math.max(minLoss, (d.loss ?? 0) - (d.lossStd ?? 0))) }))
+    .map((p, i) => `${i === 0 ? 'L' : 'L'}${xScale(p.iter).toFixed(1)},${p.y.toFixed(1)}`)
+    .join(' ');
+  const hasUncertainty = data.some((d) => (d.lossStd ?? 0) > 0);
 
   return (
     <svg width={W} height={H} style={{ display: 'block' }}>
@@ -289,6 +299,9 @@ function ConvergenceChart({ data }) {
         <line key={v} x1={pad.l} x2={W - pad.r} y1={yScale(v)} y2={yScale(v)}
           stroke="#1e293b" strokeWidth="1" />
       ))}
+      {hasUncertainty && (
+        <path d={`${bandUpper} ${bandLower} Z`} fill="rgba(56,189,248,0.14)" />
+      )}
       <path d={`${pathD} L${xScale(maxIter)},${pad.t + iH} L${pad.l},${pad.t + iH} Z`}
         fill="rgba(56,189,248,0.08)" />
       <path d={pathD} fill="none" stroke="#38bdf8" strokeWidth="1.5" strokeLinejoin="round" />
@@ -874,7 +887,7 @@ export default function App() {
   const liveConvergence = optimResult?.convergence?.length
     ? optimResult.convergence
         .filter((c) => c.best_error_V != null)
-        .map((c) => ({ iter: c.iter + 1, loss: c.best_error_V }))
+        .map((c) => ({ iter: c.iter + 1, loss: c.best_error_V, lossStd: c.best_error_std_V ?? 0 }))
     : CONVERGENCE;
 
   // Derive live log lines from optimizer history
@@ -931,7 +944,11 @@ export default function App() {
         const nextHistory = [...(current.history || []), payload.entry];
         const nextConvergence = [
           ...(current.convergence || []),
-          { iter: payload.iteration, best_error_V: payload.best_error_V },
+          {
+            iter: payload.iteration,
+            best_error_V: payload.best_error_V,
+            best_error_std_V: payload.best_error_std_V,
+          },
         ];
 
         let bestVref = current.best_vref_V;
