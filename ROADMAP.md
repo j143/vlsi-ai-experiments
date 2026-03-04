@@ -20,6 +20,32 @@ Track progress by tagging tasks: `[analog]`, `[ML]`, `[layout]`, `[infra]`.
 
 ---
 
+## UI Review + High-Value Activities (Mar 2026)
+*Goal: Track the concrete product/UX/backend tasks identified in `ui-review.md` and `High-value-next-steps.md`.*
+
+### Delivered in PR #13 (`ui-updates`)
+- [x] `[infra]` Real backend API wired to frontend (implemented with Flask in `api/server.py`)
+- [x] `[infra]` Live optimizer progress streaming via SSE (`/api/optimize/stream`)
+- [x] `[infra]` Save Project + Export Netlist actions wired end-to-end
+- [x] `[infra]` Runtime hardening for API JSON/stream failures (fallback base + retry)
+- [x] `[layout]` Layout Viewer wired to synthetic patch + DRC preview API
+- [x] `[ML]` Convergence diagnostics improved in UI (axis semantics + uncertainty band)
+- [x] `[ML]` Candidate metrics wiring in UI (PSRR/Iq displayed in Selected panel)
+- [x] `[ML]` Unified pass/fail criterion between optimizer summary and corner table
+- [x] `[infra]` Functional project/top-bar controls (datasets/netlists listing, history, settings, branch)
+- [x] `[ML]` Initial convergence tuning pass (wider search bounds, higher budget defaults, surrogate/kernel tuning)
+- [x] `[analog]` Real ngspice-backed flow set as default; synthetic mode requires explicit opt-in
+
+### In progress / needs validation depth
+- [ ] `[ML]` Demonstrate consistent spec convergence against real ngspice runs (not only synthetic fallback)
+- [ ] `[analog]` Add reproducible benchmark report for pass-rate and convergence quality across seeds
+
+### Pending high-value items
+- [ ] `[analog]` Integrate real SKY130 PDK setup (library includes + validated tech values)
+- [ ] `[ML]` Implement multi-corner joint optimization objective (corner constraints in-loop, not only post-hoc)
+
+---
+
 ## Milestone 1 — MVP Bandgap Flow (manual sweep + logging)
 *Goal: Run a real sweep, collect data, and inspect results. No ML yet.*
 
