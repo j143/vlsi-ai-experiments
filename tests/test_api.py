@@ -27,6 +27,12 @@ def client():
         yield c
 
 
+@pytest.fixture()
+def ngspice_available(client):
+    resp = client.get("/api/status")
+    return bool(resp.get_json()["ngspice_available"])
+
+
 class TestStatus:
     def test_ok_field(self, client):
         resp = client.get("/api/status")
@@ -43,18 +49,24 @@ class TestStatus:
 class TestSimulate:
     _PARAMS = {"N": 8, "R1": 100000, "R2": 10000, "W_P": 4e-6, "L_P": 1e-6}
 
-    def test_returns_expected_keys(self, client):
+    def test_returns_expected_keys(self, client, ngspice_available):
+        payload = {"params": self._PARAMS}
+        if not ngspice_available:
+            payload["use_synthetic"] = True
         resp = client.post(
             "/api/simulate",
-            json={"params": self._PARAMS},
+            json=payload,
         )
         assert resp.status_code == 200
         data = resp.get_json()
         for key in ("params", "vref_V", "iq_uA", "spec_checks"):
             assert key in data
 
-    def test_vref_is_numeric(self, client):
-        resp = client.post("/api/simulate", json={"params": self._PARAMS})
+    def test_vref_is_numeric(self, client, ngspice_available):
+        payload = {"params": self._PARAMS}
+        if not ngspice_available:
+            payload["use_synthetic"] = True
+        resp = client.post("/api/simulate", json=payload)
         data = resp.get_json()
         # With synthetic runner vref_V should be a float
         if data.get("error") is None:
@@ -67,62 +79,106 @@ class TestSimulate:
         )
         assert resp.status_code == 400
 
-    def test_empty_params_still_runs(self, client):
-        resp = client.post("/api/simulate", json={"params": {}})
+    def test_empty_params_still_runs(self, client, ngspice_available):
+        payload = {"params": {}}
+        if not ngspice_available:
+            payload["use_synthetic"] = True
+        resp = client.post("/api/simulate", json=payload)
         assert resp.status_code == 200
+
+    def test_real_default_requires_ngspice_or_override(self, client, ngspice_available):
+        resp = client.post("/api/simulate", json={"params": self._PARAMS})
+        if ngspice_available:
+            assert resp.status_code == 200
+        else:
+            assert resp.status_code == 503
 
 
 class TestOptimize:
-    def test_returns_expected_keys(self, client):
+    def test_returns_expected_keys(self, client, ngspice_available):
+        payload = {"budget": 3, "n_init": 2, "seed": 0}
+        if not ngspice_available:
+            payload["use_synthetic"] = True
         resp = client.post(
             "/api/optimize",
-            json={"budget": 3, "n_init": 2, "seed": 0},
+            json=payload,
         )
         assert resp.status_code == 200
         data = resp.get_json()
         for key in ("best_params", "n_simulations", "n_spec_pass", "history", "convergence"):
             assert key in data
 
-    def test_n_simulations_matches_budget(self, client):
+    def test_n_simulations_matches_budget(self, client, ngspice_available):
+        payload = {"budget": 3, "n_init": 2, "seed": 0}
+        if not ngspice_available:
+            payload["use_synthetic"] = True
         resp = client.post(
             "/api/optimize",
-            json={"budget": 3, "n_init": 2, "seed": 0},
+            json=payload,
         )
         data = resp.get_json()
         assert data["n_simulations"] == 3
 
-    def test_history_length_matches_budget(self, client):
+    def test_history_length_matches_budget(self, client, ngspice_available):
+        payload = {"budget": 4, "n_init": 2, "seed": 1}
+        if not ngspice_available:
+            payload["use_synthetic"] = True
         resp = client.post(
             "/api/optimize",
-            json={"budget": 4, "n_init": 2, "seed": 1},
+            json=payload,
         )
         data = resp.get_json()
         assert len(data["history"]) == 4
 
-    def test_convergence_length_matches_history(self, client):
+    def test_convergence_length_matches_history(self, client, ngspice_available):
+        payload = {"budget": 4, "n_init": 2, "seed": 1}
+        if not ngspice_available:
+            payload["use_synthetic"] = True
         resp = client.post(
             "/api/optimize",
-            json={"budget": 4, "n_init": 2, "seed": 1},
+            json=payload,
         )
         data = resp.get_json()
         assert len(data["convergence"]) == len(data["history"])
 
-    def test_budget_clamped_to_maximum(self, client):
+    def test_budget_clamped_to_maximum(self, client, ngspice_available):
+        payload = {"budget": 9999, "n_init": 1, "seed": 0}
+        if not ngspice_available:
+            payload["use_synthetic"] = True
         resp = client.post(
             "/api/optimize",
-            json={"budget": 9999, "n_init": 1, "seed": 0},
+            json=payload,
         )
         data = resp.get_json()
         from api.server import _MAX_BUDGET
         assert data["n_simulations"] <= _MAX_BUDGET
 
-    def test_default_params_accepted(self, client):
+    def test_default_params_accepted(self, client, ngspice_available):
         """Calling /api/optimize with no body should work."""
         resp = client.post("/api/optimize", json={})
-        assert resp.status_code == 200
+        if ngspice_available:
+            assert resp.status_code == 200
+        else:
+            assert resp.status_code == 503
 
-    def test_stream_endpoint_emits_progress_and_final(self, client):
-        resp = client.get("/api/optimize/stream?budget=3&n_init=2&seed=0")
+    def test_real_default_requires_ngspice_or_override(self, client, ngspice_available):
+        resp = client.post("/api/optimize", json={"budget": 3, "n_init": 2, "seed": 0})
+        if ngspice_available:
+            assert resp.status_code == 200
+        else:
+            assert resp.status_code == 503
+
+        resp_override = client.post(
+            "/api/optimize",
+            json={"budget": 3, "n_init": 2, "seed": 0, "use_synthetic": True},
+        )
+        assert resp_override.status_code == 200
+
+    def test_stream_endpoint_emits_progress_and_final(self, client, ngspice_available):
+        query = "/api/optimize/stream?budget=3&n_init=2&seed=0"
+        if not ngspice_available:
+            query += "&use_synthetic=true"
+        resp = client.get(query)
         assert resp.status_code == 200
         assert resp.mimetype == "text/event-stream"
 
@@ -130,6 +186,13 @@ class TestOptimize:
         assert "event: progress" in body
         assert "event: final" in body
         assert "event: done" in body
+
+    def test_stream_real_default_requires_ngspice_or_override(self, client, ngspice_available):
+        resp = client.get("/api/optimize/stream?budget=3&n_init=2&seed=0")
+        if ngspice_available:
+            assert resp.status_code == 200
+        else:
+            assert resp.status_code == 503
 
 
 class TestLayoutPreview:
