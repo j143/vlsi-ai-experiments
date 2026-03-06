@@ -123,6 +123,17 @@ class TestCmdSweep:
         spec_cols = [c for c in df.columns if c.startswith("spec_")]
         assert len(spec_cols) >= 1
 
+    def test_sweep_csv_has_extended_columns(self, tmp_path):
+        """Sweep output should include tc_ppm_C, psrr_dB, err_from_target_mV (issue #16)."""
+        out_csv = tmp_path / "extended_test.csv"
+        rc = main(["sweep", "--n-samples", "4", "--out", str(out_csv)])
+        assert rc == 0
+        import pandas as pd
+        df = pd.read_csv(out_csv)
+        assert "tc_ppm_C" in df.columns
+        assert "psrr_dB" in df.columns
+        assert "err_from_target_mV" in df.columns
+
 
 # ---------------------------------------------------------------------------
 # optimize sub-command (integration, no ngspice)
