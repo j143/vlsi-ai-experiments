@@ -20,12 +20,19 @@ Usage::
     FLASK_DEBUG=1 python api/server.py    # debug mode
 
 CORS is enabled for all origins so the Vite dev server (port 5173) can call it.
+
+When the environment variable ``STATIC_DIR`` is set (e.g. to
+``/app/frontend/dist``), Flask will also serve the pre-built React SPA from
+that directory.  All non-API routes fall through to ``index.html`` so that
+client-side routing works correctly.  This is the mode used inside the
+combined Docker image (``Dockerfile.app``).
 """
 
 import argparse
 import json
 import logging
 import math
+import os
 import sys
 import threading
 from datetime import datetime
@@ -33,7 +40,7 @@ from queue import Queue
 from pathlib import Path
 
 import numpy as np
-from flask import Flask, Response, request
+from flask import Flask, Response, request, send_from_directory
 from flask_cors import CORS
 
 # Ensure repo root is importable
@@ -50,6 +57,39 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 CORS(app)
+
+# ---------------------------------------------------------------------------
+# Optional static-file serving for the pre-built React SPA
+# ---------------------------------------------------------------------------
+# When STATIC_DIR is set (e.g. /app/frontend/dist) Flask serves the SPA.
+# All non-API paths fall through to index.html so client-side routing works.
+
+_STATIC_DIR = Path(os.environ.get("STATIC_DIR")) if os.environ.get("STATIC_DIR") else None
+
+
+if _STATIC_DIR:
+    logger.info("Serving React SPA from %s", _STATIC_DIR)
+
+    @app.get("/", defaults={"path": ""})
+    @app.get("/<path:path>")
+    def serve_spa(path: str):
+        """Serve pre-built React SPA.
+
+        Flask's routing engine prioritises specific patterns (e.g. ``/api/*``)
+        over this catch-all, so all API endpoints registered below continue to
+        work as expected.
+        """
+        if path:
+            # Resolve the candidate path and verify it stays inside _STATIC_DIR
+            # to prevent directory-traversal attacks.
+            try:
+                candidate = (_STATIC_DIR / path).resolve()
+                _STATIC_DIR.resolve().stat()  # ensure static dir itself is accessible
+                if candidate.is_relative_to(_STATIC_DIR.resolve()) and candidate.is_file():
+                    return send_from_directory(str(_STATIC_DIR), path)
+            except (ValueError, OSError):
+                pass
+        return send_from_directory(str(_STATIC_DIR), "index.html")
 
 
 def _sanitize_json(data):
@@ -547,12 +587,16 @@ def netlist_export():
 
 def _parse_args():
     parser = argparse.ArgumentParser(description="VLSI-AI API server")
-    parser.add_argument("--port", type=int, default=5000, help="Port to listen on")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind to")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("PORT", 5000)),
+                        help="Port to listen on (default: 5000, or $PORT env var)")
+    parser.add_argument("--host", default=os.environ.get("HOST", "127.0.0.1"),
+                        help="Host to bind to (default: 127.0.0.1, or $HOST env var)")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = _parse_args()
     logger.info("Starting VLSI-AI API server on %s:%d", args.host, args.port)
+    if _STATIC_DIR:
+        logger.info("Combined mode: serving React SPA from %s", _STATIC_DIR)
     app.run(host=args.host, port=args.port, debug=False)

@@ -1,0 +1,29 @@
+# docker/docker-compose.yml
+# ==========================
+# Starts the VLSI-AI Design Studio (frontend + backend) in a single container.
+#
+# Usage:
+#   cd docker
+#   docker compose up --build        # build image and start
+#   docker compose up -d --build     # start in background
+#   docker compose down              # stop and remove containers
+#
+# The app will be available at http://localhost:5000
+
+services:
+  app:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.app
+    image: vlsi-ai-app
+    ports:
+      - "5000:5000"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "5000"
+      STATIC_DIR: "/app/frontend/dist"
+    volumes:
+      # Persist generated results and datasets across container restarts
+      - ../results:/app/results
+      - ../datasets:/app/datasets
+    restart: unless-stopped
