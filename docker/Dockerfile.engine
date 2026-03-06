@@ -1,0 +1,60 @@
+# docker/Dockerfile.engine
+# =========================
+# Engine image for the vlsi-ai toolkit.
+#
+# Includes:
+#   - ngspice (open-source SPICE simulator)
+#   - Python 3.11 with all project dependencies
+#   - vlsi-ai CLI entry-point
+#
+# Build:
+#   docker build -t vlsi-ai-engine -f docker/Dockerfile.engine .
+#
+# Run (full demo):
+#   docker run --rm -v $PWD/results:/app/results vlsi-ai-engine demo
+#
+# Run (sweep only):
+#   docker run --rm -v $PWD/datasets:/app/datasets vlsi-ai-engine sweep \
+#     --netlist bandgap/netlists/bandgap_simple.sp \
+#     --out datasets/sky130_bandgap_real.csv
+
+FROM python:3.11-slim
+
+LABEL org.opencontainers.image.title="vlsi-ai-engine" \
+      org.opencontainers.image.description="Bandgap design optimisation engine" \
+      org.opencontainers.image.source="https://github.com/j143/vlsi-ai-experiments"
+
+# Install system dependencies: ngspice + C build tools (needed by some Python packages)
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        ngspice \
+        build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy only the dependency files first (better layer caching)
+COPY requirements.txt ./
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copy the rest of the project
+COPY . /app
+
+# Install the vlsi-ai package (provides the CLI entry-point)
+RUN pip install --no-cache-dir -e .
+
+# Default dataset and results directories (can be overridden via -v mounts)
+ENV VLSI_AI_DATASETS=/app/datasets \
+    VLSI_AI_RESULTS=/app/results
+
+# Ensure output directories exist
+RUN mkdir -p /app/datasets /app/results
+
+# Use the CLI as the container entry-point
+ENTRYPOINT ["vlsi-ai"]
+
+# Default: show help when no command is supplied
+CMD ["--help"]
