@@ -145,6 +145,31 @@ class TestCheckSpecs:
         checks = _check_specs(metrics, specs)
         assert checks["iq"] is False
 
+    def test_tc_pass(self):
+        specs = self._make_specs()
+        metrics = {"vref_V": 1.200, "tc_ppm_C": 10.0}  # well below max_ppm_C=30
+        checks = _check_specs(metrics, specs)
+        assert checks["tc"] is True
+
+    def test_tc_fail(self):
+        specs = self._make_specs()
+        metrics = {"vref_V": 1.200, "tc_ppm_C": 35.0}  # above max_ppm_C=30
+        checks = _check_specs(metrics, specs)
+        assert checks["tc"] is False
+
+    def test_known_good_design_passes_all_specs(self):
+        """A design within all spec limits must be PASS for every check (issue #16)."""
+        specs = self._make_specs()
+        metrics = {
+            "vref_V": 1.200,    # exactly at target, within ±10 mV
+            "tc_ppm_C": 12.0,   # below max_ppm_C=30 (direction: minimize)
+            "iq_uA": 20.0,      # below max_uA=50
+        }
+        checks = _check_specs(metrics, specs)
+        assert checks["vref"] is True, "Vref should PASS for on-target design"
+        assert checks["tc"] is True, "TC should PASS when below max (one-sided max constraint)"
+        assert checks["iq"] is True, "Iq should PASS when below max"
+
 
 class TestBandgapRunner:
     """Tests for BandgapRunner."""

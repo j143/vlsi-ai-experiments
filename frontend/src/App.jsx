@@ -25,10 +25,10 @@ import {
 
 // --- Configuration & Mock Data ---
 const SPECS = [
-  { id: 'vref', label: 'Vref (mV)', target: 1200, unit: 'mV', tol: 10 },
-  { id: 'tc', label: 'TempCo (ppm/C)', target: 20, unit: 'ppm', tol: 5 },
-  { id: 'psrr', label: 'PSRR (dB)', target: -60, unit: 'dB', tol: 5 },
-  { id: 'iq', label: 'I-Quiescent (µA)', target: 10, unit: 'µA', tol: 2 },
+  { id: 'vref', label: 'Vref (mV)', target: 1200, unit: 'mV', tol: 10, direction: 'target' },
+  { id: 'tc', label: 'TempCo (ppm/C)', target: 20, unit: 'ppm', direction: 'max' },
+  { id: 'psrr', label: 'PSRR (dB)', target: -60, unit: 'dB', direction: 'min' },
+  { id: 'iq', label: 'I-Quiescent (µA)', target: 50, unit: 'µA', direction: 'max' },
 ];
 
 const DESIGN_VARS = [
@@ -221,6 +221,11 @@ function SliderRow({ varDef, value, onChange }) {
 }
 
 function SpecRow({ spec }) {
+  const constraint = spec.direction === 'max'
+    ? `≤${spec.target} ${spec.unit}`
+    : spec.direction === 'min'
+      ? `≥${spec.target} ${spec.unit}`
+      : `±${spec.tol} ${spec.unit}`;
   return (
     <div style={{
       display: 'flex',
@@ -232,7 +237,7 @@ function SpecRow({ spec }) {
       <span style={S.label}>{spec.label}</span>
       <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
         <span style={{ fontSize: '0.75rem', color: '#f8fafc', fontWeight: '500' }}>{spec.target}</span>
-        <span style={{ fontSize: '0.65rem', color: '#475569' }}>±{spec.tol} {spec.unit}</span>
+        <span style={{ fontSize: '0.65rem', color: '#475569' }}>{constraint}</span>
       </div>
     </div>
   );
@@ -618,13 +623,19 @@ function VerificationTab({ cornerData }) {
         {SPECS.map((s) => {
           const simResults = { vref: 1199.4, tc: 12.4, psrr: -61.2, iq: 9.8 };
           const value = simResults[s.id];
-          const ok = Math.abs(value - s.target) <= s.tol;
+          const ok = s.direction === 'max'
+            ? value <= s.target
+            : s.direction === 'min'
+              ? value >= s.target
+              : Math.abs(value - s.target) <= s.tol;
           return (
             <div key={s.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.4rem 0', borderBottom: '1px solid #0f172a' }}>
               <span style={S.label}>{s.label}</span>
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
                 <span style={{ fontSize: '0.75rem', color: '#f8fafc' }}>{value} {s.unit}</span>
-                <span style={{ fontSize: '0.7rem', color: '#64748b' }}>target {s.target}±{s.tol}</span>
+                <span style={{ fontSize: '0.7rem', color: '#64748b' }}>
+                  {s.direction === 'max' ? `≤${s.target}` : s.direction === 'min' ? `≥${s.target}` : `${s.target}±${s.tol}`} {s.unit}
+                </span>
                 {ok
                   ? <CheckCircle2 size={13} color="#6ee7b7" />
                   : <AlertTriangle size={13} color="#fbbf24" />}
@@ -726,10 +737,13 @@ function _paramsFromDesignValues(designValues) {
   const nRatio = Math.max(1, Math.round(designValues.r_ratio));
   const iBiasA = Math.max(0.1, designValues.i_bias) * 1e-6;
   const r1 = 1.8 / iBiasA;
+  // R1/R2 ≈ 10 is the gain needed for Vref ≈ 1.19 V at N=8 (Brokaw formula).
+  // R2 must NOT be derived from N (BJT area ratio) — they are independent parameters.
+  const r2 = r1 / 10;
   return {
     N: nRatio,
     R1: r1,
-    R2: r1 / nRatio,
+    R2: r2,
     W_P: designValues.w_m1 * 1e-6,
     L_P: 1e-6,
   };

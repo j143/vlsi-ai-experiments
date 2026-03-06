@@ -409,6 +409,11 @@ class SyntheticBandgapRunner:
         R1 = float(params.get("R1", 100e3))
         R2 = float(params.get("R2", 10e3))
 
+        _K_B = 1.380649e-23   # J/K
+        _Q_E = 1.602176634e-19  # C
+        _T_NOM = 300.0          # K
+        _DVBE_DT = -2.0e-3      # V/K  (typical silicon BJT)
+
         VT = 0.02585  # Thermal voltage at 300 K
         Vbe = 0.650 + self._rng.normal(0, self.noise_std)
         # Brokaw formula: Vref ≈ Vbe + (R1/R2) * VT * ln(N)
@@ -417,9 +422,23 @@ class SyntheticBandgapRunner:
         iq_uA = Vref / R1 * 1e6
         psrr_dB = -58.0 - 1.2 * np.log10(max(N, 1.0)) + self._rng.normal(0, 0.8)
 
+        # Temperature coefficient via two-temperature method (-40°C … 125°C)
+        def _vref_at_T(T: float) -> float:
+            VT_T = _K_B * T / _Q_E
+            Vbe_T = 0.650 + _DVBE_DT * (T - _T_NOM)
+            return float(np.clip(Vbe_T + (R1 / R2) * VT_T * np.log(max(N, 1.0)), 0.3, 2.5))
+
+        T_cold, T_hot = 233.0, 398.0  # -40°C and 125°C
+        vref_cold = _vref_at_T(T_cold)
+        vref_hot = _vref_at_T(T_hot)
+        vref_nom = max(abs(float(Vref)), 0.1)
+        tc_ppm_C = round(abs(vref_hot - vref_cold) / (vref_nom * (T_hot - T_cold)) * 1e6, 2)
+
         target = self.specs["vref"]["target_V"]
         tol = self.specs["vref"]["tolerance_V"]
+        max_tc = float(self.specs.get("temperature_coefficient", {}).get("max_ppm_C", 20.0))
         spec_vref = bool(abs(Vref - target) <= tol)
+        spec_tc = bool(tc_ppm_C <= max_tc)
         spec_iq = bool(iq_uA <= self.specs["quiescent_current"]["max_uA"])
         psrr_min_dB = float(self.specs.get("psrr", {}).get("min_dc_dB", 60.0))
         spec_psrr = bool(abs(psrr_dB) >= psrr_min_dB)
@@ -427,9 +446,10 @@ class SyntheticBandgapRunner:
         return {
             "params": params,
             "vref_V": float(Vref),
+            "tc_ppm_C": tc_ppm_C,
             "iq_uA": float(iq_uA),
             "psrr_dB": float(psrr_dB),
-            "spec_checks": {"vref": spec_vref, "iq": spec_iq, "psrr": spec_psrr},
+            "spec_checks": {"vref": spec_vref, "tc": spec_tc, "iq": spec_iq, "psrr": spec_psrr},
             "raw_output": "",
             "error": None,
         }

@@ -41,14 +41,17 @@ SPECS_FILE = _REPO_ROOT / "bandgap" / "specs.yaml"
 FEATURES = ["N", "R1", "R2", "W_P", "L_P"]
 
 
-def _get_runner() -> Any:
+def _get_runner(netlist: str | None = None) -> Any:
     """Return a BandgapRunner if ngspice is present, else SyntheticBandgapRunner."""
     from ml.optimize import SyntheticBandgapRunner
 
     try:
         from bandgap.runner import BandgapRunner, _find_ngspice
         _find_ngspice()
-        return BandgapRunner()
+        kwargs = {}
+        if netlist:
+            kwargs["netlist_template"] = netlist
+        return BandgapRunner(**kwargs)
     except (ImportError, FileNotFoundError):
         logger.warning(
             "ngspice not found — using analytical synthetic runner. "
@@ -65,6 +68,7 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     """Run an ngspice parameter sweep and write results to a CSV file."""
     import numpy as np
     import pandas as pd
+    import yaml
     from data_gen.sweep_bandgap import _make_lhs_samples, _make_grid_samples
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -78,7 +82,11 @@ def cmd_sweep(args: argparse.Namespace) -> int:
     else:
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    runner = _get_runner()
+    runner = _get_runner(netlist=args.netlist)
+
+    with open(SPECS_FILE) as f:
+        specs = yaml.safe_load(f)
+    vref_target = specs["vref"]["target_V"]
 
     if args.mode == "grid":
         samples = _make_grid_samples(n_per_dim=args.n_samples)
@@ -102,7 +110,14 @@ def cmd_sweep(args: argparse.Namespace) -> int:
 
         row: dict[str, Any] = {**params}
         row["vref_V"] = result.get("vref_V")
+        row["tc_ppm_C"] = result.get("tc_ppm_C")
+        row["psrr_dB"] = result.get("psrr_dB")
         row["iq_uA"] = result.get("iq_uA")
+        # Convenience: error from 1.2 V target [mV]
+        vref = result.get("vref_V")
+        row["err_from_target_mV"] = (
+            round(abs(vref - vref_target) * 1000, 3) if vref is not None else None
+        )
         for spec_name, passed in result.get("spec_checks", {}).items():
             row[f"spec_{spec_name}_pass"] = passed
         row["sim_time_s"] = round(elapsed, 4)
