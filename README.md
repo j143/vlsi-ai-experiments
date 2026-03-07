@@ -2,7 +2,6 @@
 
 An ML-assisted analog design and layout flow, built around a Brokaw bandgap reference.
 
-The goal is a **practical, trustworthy, and measurable** flow — not a demo.
 Every claim is backed by simulation data and clear metrics.
 
 ---
@@ -13,7 +12,6 @@ Every claim is backed by simulation data and clear metrics.
 vlsi-ai-experiments/
 ├── bandgap/                # Bandgap reference design
 │   ├── netlists/           # SPICE netlists (ngspice-compatible)
-│   │   └── bandgap_simple.sp
 │   ├── runner.py           # ngspice runner: run sims, parse outputs, check specs
 │   └── specs.yaml          # Target specifications (Vref, TC, PSRR, Iq, ...)
 ├── config/
@@ -27,9 +25,12 @@ vlsi-ai-experiments/
 │   ├── data_stub.py        # Synthetic layout patch generator
 │   ├── patch_model.py      # UNet-style patch completion model (PyTorch)
 │   └── evaluate.py         # IoU, pixel accuracy, and partial DRC check
+├── api/                    # Flask REST API (backend)
+├── frontend/               # React/Vite UI (frontend)
+├── docker/                 # Dockerfiles and docker-compose
 ├── tests/                  # Unit and smoke tests (pytest)
 ├── PROMPTS/                # Agent prompt files for AI co-developers
-├── .github/workflows/      # CI: lint + tests
+├── .github/workflows/      # CI: lint, build, test
 ├── AGENTS.md               # Agent role definitions and guardrails
 ├── ROADMAP.md              # Project milestones
 └── CONTRIBUTING.md         # Coding guidelines and data rules
@@ -39,66 +40,131 @@ vlsi-ai-experiments/
 
 ## Quick Start
 
-### 1. Set up environment
+### Option A — Docker (recommended, no local setup needed)
+
+```bash
+git clone https://github.com/j143/vlsi-ai-experiments.git
+cd vlsi-ai-experiments
+
+# Build and start the full app (UI + API) on http://localhost:5000
+cd docker
+docker compose up --build
+```
+
+To run just the engine CLI inside Docker:
+```bash
+# Show help
+docker run --rm vlsi-ai-engine --help
+
+# Run the built-in demo
+docker run --rm -v $PWD/results:/app/results vlsi-ai-engine demo
+```
+
+### Option B — Local Python setup
+
 ```bash
 git clone https://github.com/j143/vlsi-ai-experiments.git
 cd vlsi-ai-experiments
 python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pip install -e .
 ```
 
-### 2. Run with bundled SKY130 models (recommended)
-This repo includes **real open-source SKY130 SPICE models** in `pdk/sky130/`.
-You can immediately run examples without installing a PDK:
+#### Run the API server
 
 ```bash
-# Instant: run analytics + ML pipeline
-python examples/generate_reference_dataset.py
-python examples/run_full_pipeline.py
+python api/server.py              # default port 5000
+```
 
-# With ngspice installed: real simulation
+Then open `http://localhost:5000` (requires the frontend to be built — see below).
+
+#### Build and serve the frontend (UI)
+
+```bash
+cd frontend
+npm ci
+npm run build                     # writes static files to frontend/dist/
+
+# Start the API server with the built UI
+cd ..
+STATIC_DIR=frontend/dist python api/server.py
+# Open http://localhost:5000
+```
+
+During development, the Vite dev server can proxy API calls:
+```bash
+# Terminal 1 — backend
+python api/server.py
+
+# Terminal 2 — frontend (hot-reload)
+cd frontend
+npm run dev                       # http://localhost:5173
+```
+
+### Run tests (no ngspice required)
+
+```bash
+pytest tests/ -v -m "not requires_ngspice"
+```
+
+All tests pass in ~10 seconds.
+
+---
+
+## SKY130 / PDK Support
+
+This repo bundles **real SPICE models** from open-source PDKs.
+
+### Bundled: SkyWater SKY130 (Apache 2.0)
+- Location: `pdk/sky130/` — minimal TT-corner extraction (~770 KB)
+- Example netlist: `examples/sky130_bandgap.sp`
+
+```bash
+# With ngspice installed:
 sudo apt-get install ngspice
 ngspice examples/sky130_bandgap.sp
 ```
 
-See [examples/README.md](examples/README.md) for full details and other PDKs.
+### Other PDKs (IHP SG13G2, GF180MCU, ...)
+See [examples/README.md](examples/README.md) for installation and usage.
 
-### 3. (Optional) Configure other PDKs
-For other processes (GF180MCU, IHP SG13G2, custom), edit `config/tech_placeholder.yaml`
-and replace every `TODO(human):` entry with values from your target PDK.
+### Custom process
+Edit `config/tech_placeholder.yaml` and replace every `TODO(human):` entry.
 
-### 4. Run tests (no ngspice required)
+---
+
+## Generate a Dataset
+
 ```bash
-pytest tests/ -v -m "not requires_ngspice"
-```
-Expected output: all tests pass in ~10 seconds.
-
-### 5. Generate a dataset (requires ngspice + your own PDK)
-```bash
-# Install ngspice:  sudo apt-get install ngspice
+# Install ngspice first:  sudo apt-get install ngspice
 python data_gen/sweep_bandgap.py --mode lhs --n-samples 50 --out datasets/
 ```
-This writes `datasets/bandgap_sweep_<timestamp>.csv`.
-Or use the pre-generated analytics dataset from `examples/demo_dataset.csv`.
 
-### 6. Train a surrogate model
+Or use the pre-generated reference dataset: `datasets/bandgap_sweep_real_sky130.csv`.
+
+---
+
+## Train a Surrogate Model
+
 ```python
 import pandas as pd
 from ml.surrogate import GaussianProcessSurrogate, evaluate_surrogate
 
-df = pd.read_csv("datasets/bandgap_sweep_<timestamp>.csv")
+df = pd.read_csv("datasets/bandgap_sweep_real_sky130.csv")
 valid = df["error"].isna() | (df["error"] == "")
 X = df.loc[valid, ["N", "R1", "R2", "W_P", "L_P"]].values
 y = df.loc[valid, "vref_V"].values
 
 model = GaussianProcessSurrogate()
 model.fit(X[:40], y[:40])
-metrics = evaluate_surrogate(model, X[40:], y[40:])
-print(metrics)
+print(evaluate_surrogate(model, X[40:], y[40:]))
 ```
 
-### 7. Run Bayesian optimization
+---
+
+## Run Bayesian Optimization
+
 ```python
 from bandgap.runner import BandgapRunner
 from ml.optimize import BayesianOptimizer
@@ -125,41 +191,6 @@ print(f"Simulations used: {result.n_simulations}, Spec pass rate: {result.spec_p
 
 ---
 
-## Real Open PDK Support
-
-This repo bundles **real SPICE models** from open-source PDKs to support reproducible
-simulation without requiring PDK installation.
-
-### Bundled: SkyWater SKY130 (Apache 2.0)
-- Location: `pdk/sky130/` — minimal TT-corner extraction (~770 KB BSIM4 PFET + PNP + resistor models)
-- Example netlist: `examples/sky130_bandgap.sp` — ready to run with ngspice
-- See [pdk/sky130/README.md](pdk/sky130/README.md) for model inventory
-
-### Available: IHP SG13G2, GF180MCU, others
-For other PDKs, see [examples/README.md](examples/README.md) for installation and usage.
-Each includes a reference bandgap netlist and an `open_data_guide.md` for setup.
-
----
-
-## Technology / PDK Configuration
-
-**For SKY130 (recommended for quick start):**
-- Models are bundled and ready to use.
-- No additional configuration needed.
-
-**For other PDKs or custom processes:**
-1. Follow the installation guide in [examples/open_data_guide.md](examples/open_data_guide.md).
-2. Edit `config/tech_placeholder.yaml` to add process parameters.
-3. Update your netlist to `.include` the PDK model library.
-
-For examples of pre-wired netlists, see `examples/`.
-
----
-
-## Old-style: Tech Placeholder (deprecated but still supported)
-
----
-
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for coding standards, data size limits,
@@ -172,8 +203,6 @@ See [AGENTS.md](AGENTS.md) for agent role definitions and guardrails.
 ## Roadmap
 
 See [ROADMAP.md](ROADMAP.md) for milestone tracking.
-Current status: **Milestone 0 complete** — skeleton in place.
-Next: Milestone 1 (MVP bandgap flow with real sweep data).
 
 ---
 
