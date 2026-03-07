@@ -270,3 +270,125 @@ def evaluate_patches(
         f", DRC pass rate={result['drc']['pass_rate']:.1%}" if run_drc_check else "",
     )
     return result
+
+
+def confusion_matrix_report(
+    y_true: np.ndarray,
+    y_pred: np.ndarray,
+    class_names: list[str] | None = None,
+) -> dict[str, Any]:
+    """Compute a confusion matrix and summary scores for binary patch classification.
+
+    Parameters
+    ----------
+    y_true:
+        Ground-truth labels, shape (N,).  0 = ok, 1 = bad.
+    y_pred:
+        Predicted labels, shape (N,).  0 = ok, 1 = bad.
+    class_names:
+        Display names for the two classes.  Default: ``["ok", "bad"]``.
+
+    Returns
+    -------
+    dict with keys:
+        ``confusion_matrix``  — 2×2 list [[TN, FP], [FN, TP]].
+        ``accuracy``          — float.
+        ``precision``         — float (positive / "bad" class).
+        ``recall``            — float (positive / "bad" class).
+        ``f1_score``          — float (positive / "bad" class).
+        ``class_names``       — list of class name strings.
+        ``report``            — formatted text classification report.
+    """
+    from sklearn.metrics import (
+        accuracy_score,
+        classification_report,
+        confusion_matrix as sk_confusion_matrix,
+        f1_score,
+        precision_score,
+        recall_score,
+    )
+
+    if class_names is None:
+        class_names = ["ok", "bad"]
+
+    cm = sk_confusion_matrix(y_true, y_pred)
+    acc = accuracy_score(y_true, y_pred)
+    prec = precision_score(y_true, y_pred, zero_division=0)
+    rec = recall_score(y_true, y_pred, zero_division=0)
+    f1 = f1_score(y_true, y_pred, zero_division=0)
+    report = classification_report(
+        y_true, y_pred, target_names=class_names, zero_division=0
+    )
+
+    logger.info(
+        "Classification: accuracy=%.3f, precision=%.3f, recall=%.3f, F1=%.3f",
+        acc, prec, rec, f1,
+    )
+    logger.info("Confusion matrix:\n%s", cm)
+
+    return {
+        "confusion_matrix": cm.tolist(),
+        "accuracy": float(acc),
+        "precision": float(prec),
+        "recall": float(rec),
+        "f1_score": float(f1),
+        "class_names": class_names,
+        "report": report,
+    }
+
+
+if __name__ == "__main__":  # pragma: no cover
+    """End-to-end demo: generate labelled patches, train classifier, print results.
+
+    Run with::
+
+        python -m layout.evaluate
+        # or
+        python layout/evaluate.py
+    """
+    import logging as _logging
+
+    _logging.basicConfig(level=_logging.INFO, format="%(levelname)s: %(message)s")
+
+    from layout.data_stub import generate_labeled_dataset
+    from layout.patch_model import BadPatchClassifier
+
+    print("=== Layout Patch Bad-Pattern Detector ===\n")
+
+    # 1. Generate labelled dataset (100 ok + 100 bad).
+    patches, labels = generate_labeled_dataset(n_ok=100, n_bad=100, seed=42)
+    print(f"Dataset: {len(patches)} patches  "
+          f"({(labels == 0).sum()} ok, {(labels == 1).sum()} bad)\n")
+
+    # 2. Simple 80/20 train/test split (dataset already shuffled).
+    n_train = int(0.8 * len(patches))
+    X_train, X_test = patches[:n_train], patches[n_train:]
+    y_train, y_test = labels[:n_train], labels[n_train:]
+
+    # 3. Train the patch quality classifier.
+    clf = BadPatchClassifier(classifier_type="rf", random_state=42)
+    clf.fit(X_train, y_train)
+
+    # 4. Predict on the held-out test set.
+    y_pred = clf.predict(X_test)
+
+    # 5. Compute and display the confusion matrix + scores.
+    result = confusion_matrix_report(y_test, y_pred)
+
+    print(f"Accuracy : {result['accuracy']:.3f}")
+    print(f"Precision: {result['precision']:.3f}  (bad class)")
+    print(f"Recall   : {result['recall']:.3f}  (bad class)")
+    print(f"F1 Score : {result['f1_score']:.3f}  (bad class)\n")
+
+    names = result["class_names"]
+    cm = result["confusion_matrix"]
+    col_w = max(len(n) for n in names) + 2
+    header = " " * (col_w + 8) + "  ".join(f"pred:{n}" for n in names)
+    print("Confusion Matrix (rows = true class):")
+    print(header)
+    for i, row in enumerate(cm):
+        cells = "  ".join(f"{v:>{col_w + 5}}" for v in row)
+        print(f"  true:{names[i]:<{col_w}}  {cells}")
+
+    print("\nClassification Report:")
+    print(result["report"])
