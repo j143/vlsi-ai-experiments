@@ -80,7 +80,7 @@ jobs:
 
       - name: Lint with flake8
         run: |
-          flake8 . --max-line-length=100 --exclude=.venv,__pycache__,.git
+          flake8 . --max-line-length=100 --exclude=.venv,__pycache__,.git,node_modules
 
       - name: Run engine and API tests
         run: |
@@ -93,3 +93,93 @@ jobs:
       - name: Check bandgap specs.yaml is valid YAML
         run: |
           python -c "import yaml; yaml.safe_load(open('bandgap/specs.yaml'))"
+
+  # ---------------------------------------------------------------------------
+  # Job 3 — Playwright E2E tests (UI + API integration)
+  # ---------------------------------------------------------------------------
+  test-e2e:
+    name: Playwright E2E tests
+    runs-on: ubuntu-latest
+    needs: [build-frontend, lint-and-test]
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ---- Python backend ----
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install -e .
+
+      # ---- Node / frontend build ----
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: frontend
+        run: npm run build
+
+      # ---- Playwright ----
+      - name: Install Playwright browsers
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+
+      # ---- Start server and run tests ----
+      - name: Start Flask server (combined SPA + API)
+        run: |
+          STATIC_DIR=frontend/dist HOST=127.0.0.1 PORT=5000 python api/server.py &
+          # Wait until the API is accepting connections (up to 30 s)
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:5000/api/status && break
+            sleep 1
+          done
+          # Explicit failure if server never became ready
+          curl -sf http://127.0.0.1:5000/api/status || (echo "Server failed to start" && exit 1)
+
+      - name: Run Playwright E2E tests
+        working-directory: frontend
+        run: npx playwright test
+        env:
+          PLAYWRIGHT_BASE_URL: http://127.0.0.1:5000
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 7
+
+      - name: Upload Playwright traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: frontend/test-results/
+          retention-days: 7
+

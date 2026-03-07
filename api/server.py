@@ -63,8 +63,20 @@ CORS(app)
 # ---------------------------------------------------------------------------
 # When STATIC_DIR is set (e.g. /app/frontend/dist) Flask serves the SPA.
 # All non-API paths fall through to index.html so client-side routing works.
+#
+# Flask's send_from_directory resolves *relative* directory paths against the
+# Flask app's root_path (the directory containing this file, i.e. api/).
+# We therefore always resolve STATIC_DIR to an absolute path here.  Relative
+# values are resolved against _REPO_ROOT so that
+#   STATIC_DIR=frontend/dist python api/server.py
+# works regardless of the current working directory.
 
-_STATIC_DIR = Path(os.environ.get("STATIC_DIR")) if os.environ.get("STATIC_DIR") else None
+_raw_static = os.environ.get("STATIC_DIR")
+if _raw_static:
+    _p = Path(_raw_static)
+    _STATIC_DIR = _p if _p.is_absolute() else (_REPO_ROOT / _p).resolve()
+else:
+    _STATIC_DIR = None  # type: ignore[assignment]
 
 
 if _STATIC_DIR:
@@ -84,8 +96,7 @@ if _STATIC_DIR:
             # to prevent directory-traversal attacks.
             try:
                 candidate = (_STATIC_DIR / path).resolve()
-                _STATIC_DIR.resolve().stat()  # ensure static dir itself is accessible
-                if candidate.is_relative_to(_STATIC_DIR.resolve()) and candidate.is_file():
+                if candidate.is_relative_to(_STATIC_DIR) and candidate.is_file():
                     return send_from_directory(str(_STATIC_DIR), path)
             except (ValueError, OSError):
                 pass
