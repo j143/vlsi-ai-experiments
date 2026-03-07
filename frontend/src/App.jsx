@@ -903,6 +903,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    // Wait until the server status is known before sending simulate requests.
+    // When ok===null the status probe hasn't resolved yet; firing a real-ngspice
+    // request would return 503 because ngspice_available hasn't been confirmed.
+    if (serverStatus.ok === null) return;
+
     const timer = setTimeout(async () => {
       setIsEstimating(true);
       setEstimateError(null);
@@ -910,7 +915,8 @@ export default function App() {
       const simParams = _paramsFromDesignValues(designValues);
 
       try {
-        const useSynthetic = serverStatus.ngspice_available === false;
+        // Use synthetic runner whenever ngspice is not explicitly confirmed available.
+        const useSynthetic = serverStatus.ngspice_available !== true;
         const data = await fetchApiJson('/simulate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -930,7 +936,7 @@ export default function App() {
     }, 350);
 
     return () => clearTimeout(timer);
-  }, [designValues, serverStatus.ngspice_available, fetchApiJson]);
+  }, [designValues, serverStatus.ok, serverStatus.ngspice_available, fetchApiJson]);
 
   // Derive live candidates from optimizer history (top 3 by closest Vref)
   const liveCandidates = optimResult
@@ -982,7 +988,8 @@ export default function App() {
       budget: '50',
       n_init: '10',
       seed: '42',
-      use_synthetic: serverStatus.ngspice_available === false ? 'true' : 'false',
+      // Use synthetic runner whenever ngspice is not explicitly confirmed available.
+      use_synthetic: serverStatus.ngspice_available !== true ? 'true' : 'false',
     });
 
     const startStream = (base, allowFallback) => {
