@@ -17,7 +17,19 @@ to analog circuit design data.
 - Use `scikit-learn` for small models; `PyTorch` for neural networks.
 - Never hardcode spec values — read them from `bandgap/specs.yaml`.
 
-## Uncertainty Handling
+## Accuracy & Confidence
+
+- Use `accuracy_confidence(fraction)` from `ml/surrogate.py` for High/Medium/Low labels (≥90%/≥70%/<70%).
+- Always evaluate surrogate accuracy on *both* synthetic data and `datasets/bandgap_sweep_real_sky130.csv` when available.
+- Report `accuracy_pct` (within ±10 mV), `mean_error_mV`, and `confidence` label for every model evaluation.
+
+## Preset-Weighted Loss
+
+- Each optimization preset must carry `weights = {"vref": float, "iq": float, "psrr": float}`.
+- `BayesianOptimizer` must accept a `weights` dict and apply it when computing scalar loss from multi-output predictions.
+- Default weights: `{"vref": 1.0, "iq": 0.3, "psrr": 0.3}` (Balanced preset).
+
+
 - Every prediction made to the optimizer must include a confidence estimate.
 - When the model extrapolates (input outside training distribution), flag it.
 - Add a calibration check: predicted std vs. actual error on a validation set.

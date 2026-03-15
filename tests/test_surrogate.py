@@ -308,7 +308,7 @@ class TestSurrogateAccuracyRealData:
         rng = np.random.default_rng(seed)
         idx = rng.permutation(len(df))
         df_train = df.iloc[idx[: self._N_TRAIN]]
-        df_test = df.iloc[idx[self._N_TRAIN : self._N_TRAIN + self._N_TEST]]
+        df_test = df.iloc[idx[self._N_TRAIN: self._N_TRAIN + self._N_TEST]]
 
         X_train = df_train[FEATURES].values
         y_train = df_train["vref_V"].values
@@ -326,7 +326,7 @@ class TestSurrogateAccuracyRealData:
 
     def test_real_data_accuracy_within_tolerance(self, capsys):
         """GP trained on real SKY130 data achieves ≥80% within ±10 mV."""
-        from ml.surrogate import FEATURES, accuracy_confidence  # noqa: PLC0415
+        from ml.surrogate import accuracy_confidence  # noqa: PLC0415
 
         X_train, y_train, X_test, y_test = self._load_split(seed=42)
 
@@ -349,9 +349,10 @@ class TestSurrogateAccuracyRealData:
             f"Real-data accuracy {accuracy:.0%} < 80% — "
             "GP surrogate is not fitting the SKY130 reference sweep well."
         )
+
     def test_real_data_confidence_is_not_low(self):
         """Confidence label should be High or Medium on real reference data."""
-        from ml.surrogate import FEATURES, accuracy_confidence  # noqa: PLC0415
+        from ml.surrogate import accuracy_confidence  # noqa: PLC0415
 
         X_train, y_train, X_test, y_test = self._load_split(seed=7)
 
@@ -370,8 +371,6 @@ class TestSurrogateAccuracyRealData:
 
     def test_real_data_mean_error_below_threshold(self):
         """Mean absolute error should stay below 50 mV on real reference data."""
-        from ml.surrogate import FEATURES  # noqa: PLC0415
-
         X_train, y_train, X_test, y_test = self._load_split(seed=0)
 
         model = GaussianProcessSurrogate(n_restarts=3)
