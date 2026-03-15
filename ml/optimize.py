@@ -174,6 +174,7 @@ class BayesianOptimizer:
         xi: float = 0.01,
         specs_file: Path | str = SPECS_FILE,
         results_dir: Path | str = "results",
+        early_stop: bool = False,
     ) -> None:
         self.runner = runner
         self.budget = budget
@@ -181,6 +182,7 @@ class BayesianOptimizer:
         self.n_candidates = n_candidates
         self.xi = xi
         self.results_dir = Path(results_dir)
+        self.early_stop = early_stop
 
         with open(specs_file) as f:
             self.specs = yaml.safe_load(f)
@@ -309,6 +311,11 @@ class BayesianOptimizer:
                         "best_error_std_V": best_error_std,
                     },
                 )
+
+            # Early stop: halt as soon as the Vref spec is satisfied
+            if self.early_stop and entry.get("spec_vref_pass"):
+                logger.info("Early stop: Vref spec met at iteration %d", n_sim)
+                break
 
         best_vref = None
         if best_params:

@@ -307,6 +307,15 @@ def optimize():
     n_init = int(body.get("n_init", 10))
     seed = int(body.get("seed", 42))
     use_synthetic = bool(body.get("use_synthetic", False))
+    early_stop = bool(body.get("early_stop", False))
+    # Accept preset id; preset values are used as defaults (body overrides them)
+    preset_id = body.get("preset")
+    if preset_id:
+        preset = next((p for p in _PRESETS if p["id"] == preset_id), None)
+        if preset:
+            budget = int(body.get("budget", preset["budget"]))
+            n_init = int(body.get("n_init", preset["n_init"]))
+            early_stop = bool(body.get("early_stop", preset.get("early_stop", False)))
 
     budget = max(1, min(budget, _MAX_BUDGET))  # prevent excessive computation
     n_init = max(1, min(n_init, budget))
@@ -331,7 +340,9 @@ def optimize():
         from ml.optimize import BayesianOptimizer  # noqa: PLC0415
 
         runner = _get_runner(use_synthetic=use_synthetic)
-        opt = BayesianOptimizer(runner=runner, budget=budget, n_init=n_init)
+        opt = BayesianOptimizer(
+            runner=runner, budget=budget, n_init=n_init, early_stop=early_stop,
+        )
         result = opt.run(seed=seed)
     except Exception as exc:
         logger.exception("Optimizer error")
@@ -370,7 +381,7 @@ def optimize():
 def optimize_stream():
     """Stream optimizer progress via Server-Sent Events (SSE).
 
-    Query params (all optional): budget, n_init, seed.
+    Query params (all optional): budget, n_init, seed, early_stop, preset.
     Emits events:
       - progress: per-iteration update (entry + running summary)
       - final: full optimization payload, same shape as /api/optimize
@@ -381,6 +392,17 @@ def optimize_stream():
     n_init = int(request.args.get("n_init", 10))
     seed = int(request.args.get("seed", 42))
     use_synthetic = _parse_bool(request.args.get("use_synthetic"), default=False)
+    early_stop = _parse_bool(request.args.get("early_stop"), default=False)
+    # Accept preset id; preset values are used as defaults (query params override)
+    preset_id = request.args.get("preset")
+    if preset_id:
+        preset = next((p for p in _PRESETS if p["id"] == preset_id), None)
+        if preset:
+            budget = int(request.args.get("budget", preset["budget"]))
+            n_init = int(request.args.get("n_init", preset["n_init"]))
+            early_stop = _parse_bool(
+                request.args.get("early_stop"), default=preset.get("early_stop", False)
+            )
 
     budget = max(1, min(budget, _MAX_BUDGET))
     n_init = max(1, min(n_init, budget))
@@ -411,7 +433,9 @@ def optimize_stream():
                 from ml.optimize import BayesianOptimizer  # noqa: PLC0415
 
                 runner = _get_runner(use_synthetic=use_synthetic)
-                opt = BayesianOptimizer(runner=runner, budget=budget, n_init=n_init)
+                opt = BayesianOptimizer(
+                    runner=runner, budget=budget, n_init=n_init, early_stop=early_stop,
+                )
 
                 def on_progress(entry: dict, summary: dict) -> None:
                     queue.put(
@@ -474,6 +498,152 @@ def optimize_stream():
         },
     )
 
+
+@app.get("/api/accuracy")
+def accuracy():
+    """Evaluate surrogate accuracy against synthetic ground truth.
+
+    Trains a GP surrogate on *n_train* synthetic Brokaw-formula samples,
+    then evaluates on *n_test* held-out samples.  Reports the fraction of
+    test points where |surrogate_vref − ground_truth_vref| ≤ tolerance_mV.
+
+    Query params (all optional):
+      - n_test (int, default 20): held-out evaluation points.
+      - n_train (int, default 200): training set size.
+      - seed (int, default 42): random seed for reproducibility.
+      - tolerance_mV (float, default 10.0): pass/fail threshold in mV.
+
+    Response::
+
+        {
+            "ok": true,
+            "n_test": 20,
+            "n_train": 200,
+            "tolerance_mV": 10.0,
+            "accuracy_pct": 92.0,
+            "mean_error_mV": 4.3,
+            "mean_std_mV": 3.1,
+            "confidence": "High"
+        }
+    """
+    n_test = max(5, min(int(request.args.get("n_test", 20)), 100))
+    n_train = max(20, min(int(request.args.get("n_train", 200)), 500))
+    seed = int(request.args.get("seed", 42))
+    tolerance_mV = float(request.args.get("tolerance_mV", 10.0))
+
+    try:
+        from ml.surrogate import GaussianProcessSurrogate, _generate_synthetic_data, FEATURES  # noqa: PLC0415
+
+        df_all = _generate_synthetic_data(n=n_train + n_test, seed=seed)
+        df_train = df_all.iloc[:n_train]
+        df_test = df_all.iloc[n_train:]
+
+        X_train = df_train[FEATURES].values
+        y_train = df_train["vref_V"].values
+        X_test = df_test[FEATURES].values
+        y_test = df_test["vref_V"].values
+
+        model = GaussianProcessSurrogate(n_restarts=3)
+        model.fit(X_train, y_train)
+
+        mean, std = model.predict_with_uncertainty(X_test)
+        errors_mV = np.abs(mean - y_test) * 1000
+        within_tol = float((errors_mV <= tolerance_mV).mean())
+        mean_error_mV = float(errors_mV.mean())
+        mean_std_mV = float(std.mean() * 1000)
+
+        if within_tol >= 0.90:
+            confidence = "High"
+        elif within_tol >= 0.70:
+            confidence = "Medium"
+        else:
+            confidence = "Low"
+
+        logger.info(
+            "Surrogate accuracy: %.0f%% within ±%.0f mV (%d test pts)",
+            within_tol * 100, tolerance_mV, n_test,
+        )
+
+        return _safe_json({
+            "ok": True,
+            "n_test": n_test,
+            "n_train": n_train,
+            "tolerance_mV": tolerance_mV,
+            "accuracy_pct": round(within_tol * 100, 1),
+            "mean_error_mV": round(mean_error_mV, 2),
+            "mean_std_mV": round(mean_std_mV, 2),
+            "confidence": confidence,
+        })
+    except Exception as exc:
+        logger.exception("Accuracy evaluation error")
+        return Response(
+            json.dumps({"error": str(exc)}),
+            status=500,
+            mimetype="application/json",
+        )
+
+
+# ---------------------------------------------------------------------------
+# /api/presets
+# ---------------------------------------------------------------------------
+
+# Named design presets.  Each preset is a bundle of optimizer settings that
+# represent a common design intent.  The budget/n_init values are treated as
+# *hints* — the client may override them.
+_PRESETS = [
+    {
+        "id": "balanced",
+        "label": "Balanced",
+        "description": "Balanced trade-off: Vref accuracy vs. power (default)",
+        "budget": 30,
+        "n_init": 10,
+        "early_stop": False,
+    },
+    {
+        "id": "low_power",
+        "label": "Low Power",
+        "description": "Minimize quiescent current; accepts slightly relaxed Vref tolerance",
+        "budget": 25,
+        "n_init": 8,
+        "early_stop": False,
+    },
+    {
+        "id": "tight_vref",
+        "label": "Tight Vref",
+        "description": "Maximize Vref accuracy (±10 mV); accepts higher power",
+        "budget": 40,
+        "n_init": 12,
+        "early_stop": False,
+    },
+]
+
+
+@app.get("/api/presets")
+def presets():
+    """Return named design presets for quick-start optimizer configuration.
+
+    Response::
+
+        {
+            "presets": [
+                {
+                    "id": "balanced",
+                    "label": "Balanced",
+                    "description": "...",
+                    "budget": 30,
+                    "n_init": 10,
+                    "early_stop": false
+                },
+                ...
+            ]
+        }
+    """
+    return _safe_json({"presets": _PRESETS})
+
+
+# ---------------------------------------------------------------------------
+# /api/layout/preview
+# ---------------------------------------------------------------------------
 
 @app.get("/api/layout/preview")
 def layout_preview():
