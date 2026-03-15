@@ -12,9 +12,9 @@ Status legend:
 ## Current Snapshot (Mar 2026)
 
 - ✅ Milestone 0 complete (repo scaffold, CI, core modules)
-- 🟡 Product/UI integration sprint delivered in PR #13 (`ui-updates`)
+- ✅ Product/UI integration sprint complete (PR #13 `ui-updates`)
 - ✅ **Milestone 1 substantially complete** — bundled real SKY130 models + example netlists + analytics dataset
-- 🟡 Milestone 2 partially complete (surrogate + BO loop implemented; real-data benchmark pending)
+- 🟡 Milestone 2 in progress (correctness engine, real-data accuracy, preset weights, BO early-stop)
 - ⬜ Milestones 3–5 mostly pending
 
 ---
@@ -35,9 +35,22 @@ Status legend:
 - [x] `[ML]` Convergence tuning pass (bounds, budget defaults, GP tuning)
 - [x] `[analog]` Real ngspice-backed flow is default; synthetic fallback is explicit opt-in
 
-### Follow-up validation (remaining)
-- [ ] `[ML]` Prove convergence consistency on real ngspice runs across multiple seeds
-- [ ] `[analog]` Publish reproducible pass-rate benchmark from real runs
+## Correctness Engine Sprint ✅
+*Goal: Measurable accuracy target, visual design feedback, fast workflow path, explicit quality metric.*
+
+### Delivered
+- [x] `[ML]` `BayesianOptimizer.early_stop` — exits BO loop immediately after first Vref-passing iteration
+- [x] `[ML]` `GET /api/accuracy?source=synthetic` — trains GP on synthetic data, returns `accuracy_pct`, `mean_error_mV`, `confidence`
+- [x] `[ML]` `GET /api/accuracy?source=real` — evaluates GP on `bandgap_sweep_real_sky130.csv` for ground-truth accuracy
+- [x] `[ML]` `accuracy_confidence()` in `ml/surrogate.py` centralises High/Medium/Low thresholds
+- [x] `[ML]` `GET /api/presets` — Balanced / Low Power / Tight Vref presets with `weights` that steer the BO loss function
+- [x] `[ML]` Preset `weights` (`vref`, `iq`, `psrr`) wired into `BayesianOptimizer` scalar loss
+- [x] `[infra]` `SpecBar` component — live colored fill bars for Vref, TempCo, PSRR, Iq updated from slider changes
+- [x] `[infra]` Dual `ModelConfidenceBadge` — Synth % + Real % chips in Spec Targets header
+- [x] `[infra]` ⚡ Quick button — `budget=15, early_stop=true` fast path
+- [x] `[ML]` `TestSurrogateAccuracyRealData` — 4 real-data accuracy tests on SKY130 reference CSV (≥80% within ±10 mV)
+- [x] `[infra]` All E2E Playwright tests fixed and passing (27/27)
+- [x] `[infra]` All flake8 lint checks passing (0 errors)
 
 ---
 
@@ -98,9 +111,12 @@ Status legend:
 
 - [x] `[ML]` Implement Bayesian optimization loop (`ml/optimize.py`)
 - [x] `[ML]` Add surrogate fit/predict/uncertainty test coverage (`tests/test_surrogate.py`)
-- [ ] `[ML]` Train GP surrogate on Milestone-1 real dataset
-- [ ] `[ML]` Add uncertainty calibration check (reliability / coverage)
-- [ ] `[ML]` Compare surrogate vs ngspice on held-out real test set
+- [x] `[ML]` Real-data accuracy benchmark on `bandgap_sweep_real_sky130.csv` (≥80% within ±10 mV)
+- [x] `[ML]` `accuracy_confidence()` thresholds (High ≥90% / Medium ≥70% / Low <70%)
+- [x] `[ML]` Preset-weighted BO loss function (vref / iq / psrr weights per preset)
+- [x] `[ML]` `early_stop` flag exits BO after first Vref-passing iteration
+- [ ] `[ML]` Uncertainty calibration check (reliability / coverage on real data)
+- [ ] `[ML]` Compare surrogate vs ngspice on held-out real test set (with ngspice in CI)
 - [ ] `[ML]` Add BO-vs-grid benchmark report (sim count, time, spec-pass rate)
 - [ ] `[analog]` Verify optimizer proposals satisfy analog sanity checks
 - [ ] `[infra]` Add tiny optimizer smoke path in CI (short budget)

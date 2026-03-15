@@ -39,7 +39,7 @@ each AI agent operating in this repository. All agents must read this file befor
 ### Inputs
 - `data_gen/` — dataset generation scripts
 - `ml/` — existing surrogate model and optimizer code
-- `datasets/` — CSV/Parquet files produced by simulation sweeps
+- `datasets/` — CSV/Parquet files produced by simulation sweeps (incl. `bandgap_sweep_real_sky130.csv`)
 - `bandgap/specs.yaml` — spec definitions (for objective functions)
 
 ### Outputs
@@ -56,6 +56,10 @@ each AI agent operating in this repository. All agents must read this file befor
 - Never commit large dataset files (> 10 MB) — add them to `.gitignore`.
 - Model hyperparameters must be configurable via arguments, not hardcoded.
 - Every new model must have at least one unit test.
+- **Accuracy must be evaluated on real data**: use `accuracy_confidence()` from `ml/surrogate.py`
+  and run evaluation on `datasets/bandgap_sweep_real_sky130.csv` whenever available.
+- **Preset weights** must be wired into the BO loss function; do not add presets that only
+  change `budget`/`n_init` without also adjusting the multi-output scalar loss.
 
 ---
 
@@ -114,3 +118,11 @@ each AI agent operating in this repository. All agents must read this file befor
 - Use `# TODO(agent-name):` comments to leave notes for other agents.
 - Open a PR for every substantive change; do not commit directly to `main`.
 - Milestone tracking lives in `ROADMAP.md` — update it when closing tasks.
+
+## CI Checklist (all agents)
+
+Every PR must pass all of the following before merging:
+1. `flake8 . --max-line-length=100 --exclude=.venv,__pycache__,.git,node_modules` — 0 errors
+2. `pytest tests/ -m "not requires_ngspice and not slow"` — 0 failures
+3. Playwright E2E (`cd frontend && npx playwright test`) — 27/27 pass
+4. `npm run build` in `frontend/` — 0 errors

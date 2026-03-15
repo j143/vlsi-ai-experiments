@@ -558,8 +558,9 @@ def accuracy():
         if source == "real":
             csv_path = _DATASETS_DIR / "bandgap_sweep_real_sky130.csv"
             if not csv_path.exists():
+                _msg = "Real SKY130 dataset not found. Run data generation first."
                 return Response(
-                    json.dumps({"error": "Real SKY130 dataset not found. Run data generation first."}),
+                    json.dumps({"error": _msg}),
                     status=404,
                     mimetype="application/json",
                 )
