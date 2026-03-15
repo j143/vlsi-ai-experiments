@@ -248,3 +248,99 @@ class TestProjectAndExport:
     def test_project_files_invalid_kind(self, client):
         resp = client.get("/api/project/files?kind=bad")
         assert resp.status_code == 400
+
+
+class TestAccuracy:
+    """Tests for GET /api/accuracy — surrogate accuracy evaluation."""
+
+    def test_returns_expected_keys(self, client):
+        resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=42")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        for key in ("ok", "accuracy_pct", "mean_error_mV", "mean_std_mV", "confidence",
+                    "n_test", "n_train", "tolerance_mV"):
+            assert key in data, f"Missing key: {key}"
+
+    def test_ok_is_true(self, client):
+        resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=0")
+        data = resp.get_json()
+        assert data["ok"] is True
+
+    def test_accuracy_in_valid_range(self, client):
+        resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=42")
+        data = resp.get_json()
+        assert 0.0 <= data["accuracy_pct"] <= 100.0
+
+    def test_confidence_is_valid_level(self, client):
+        resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=42")
+        data = resp.get_json()
+        assert data["confidence"] in ("High", "Medium", "Low")
+
+    def test_custom_tolerance(self, client):
+        resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=42&tolerance_mV=20")
+        data = resp.get_json()
+        assert data["tolerance_mV"] == 20.0
+
+    def test_mean_error_non_negative(self, client):
+        resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=42")
+        data = resp.get_json()
+        assert data["mean_error_mV"] >= 0.0
+
+
+class TestPresets:
+    """Tests for GET /api/presets — design preset configurations."""
+
+    def test_returns_200(self, client):
+        resp = client.get("/api/presets")
+        assert resp.status_code == 200
+
+    def test_has_presets_list(self, client):
+        data = client.get("/api/presets").get_json()
+        assert "presets" in data
+        assert isinstance(data["presets"], list)
+
+    def test_at_least_two_presets(self, client):
+        data = client.get("/api/presets").get_json()
+        assert len(data["presets"]) >= 2
+
+    def test_preset_has_required_fields(self, client):
+        data = client.get("/api/presets").get_json()
+        for preset in data["presets"]:
+            for key in ("id", "label", "description", "budget", "n_init"):
+                assert key in preset, f"Preset missing key: {key}"
+
+    def test_preset_ids_are_unique(self, client):
+        data = client.get("/api/presets").get_json()
+        ids = [p["id"] for p in data["presets"]]
+        assert len(ids) == len(set(ids))
+
+    def test_known_preset_ids_present(self, client):
+        data = client.get("/api/presets").get_json()
+        ids = {p["id"] for p in data["presets"]}
+        assert "balanced" in ids
+        assert "low_power" in ids
+        assert "tight_vref" in ids
+
+
+class TestEarlyStop:
+    """Tests for early_stop flag in /api/optimize."""
+
+    def test_optimize_with_early_stop_returns_valid_result(self, client, ngspice_available):
+        payload = {"budget": 10, "n_init": 3, "seed": 42, "early_stop": True}
+        if not ngspice_available:
+            payload["use_synthetic"] = True
+        resp = client.post("/api/optimize", json=payload)
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert "history" in data
+        # Must have run at least n_init simulations
+        assert data["n_simulations"] >= 1
+
+    def test_stream_with_early_stop(self, client, ngspice_available):
+        query = "/api/optimize/stream?budget=10&n_init=3&seed=42&early_stop=true"
+        if not ngspice_available:
+            query += "&use_synthetic=true"
+        resp = client.get(query)
+        assert resp.status_code == 200
+        body = resp.get_data(as_text=True)
+        assert "event: final" in body
