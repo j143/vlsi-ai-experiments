@@ -399,6 +399,25 @@ def _generate_synthetic_data(n: int = 100, seed: int = 42) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def accuracy_confidence(accuracy_fraction: float) -> str:
+    """Map an accuracy fraction [0, 1] to a human-readable confidence label.
+
+    Thresholds
+    ----------
+    ≥ 0.90  → "High"
+    ≥ 0.70  → "Medium"
+    < 0.70  → "Low"
+
+    These thresholds are the single source of truth used by both the API
+    ``/api/accuracy`` endpoint and the test suite.
+    """
+    if accuracy_fraction >= 0.90:
+        return "High"
+    if accuracy_fraction >= 0.70:
+        return "Medium"
+    return "Low"
+
+
 def main() -> None:
     """CLI entry point: train surrogate on sweep data, save checkpoint and eval plots.
 

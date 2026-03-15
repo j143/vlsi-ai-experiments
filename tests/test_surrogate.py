@@ -221,8 +221,8 @@ class TestSurrogateAccuracy20Points:
         from ml.surrogate import FEATURES  # noqa: PLC0415
 
         df = _generate_synthetic_data(n=self._N_TRAIN + self._N_TEST, seed=42)
-        df_train = df.iloc[: self._N_TRAIN]
-        df_test = df.iloc[self._N_TRAIN :]
+        df_train = df.iloc[:self._N_TRAIN]
+        df_test = df.iloc[self._N_TRAIN:]
 
         X_train = df_train[FEATURES].values
         y_train = df_train["vref_V"].values
@@ -259,13 +259,13 @@ class TestSurrogateAccuracy20Points:
 
     def test_high_confidence_threshold(self):
         """Confidence should be High (≥90%) given a large enough training set."""
-        from ml.surrogate import FEATURES  # noqa: PLC0415
+        from ml.surrogate import FEATURES, accuracy_confidence  # noqa: PLC0415
 
         df = _generate_synthetic_data(n=self._N_TRAIN + self._N_TEST, seed=7)
-        X_train = df.iloc[: self._N_TRAIN][FEATURES].values
-        y_train = df.iloc[: self._N_TRAIN]["vref_V"].values
-        X_test = df.iloc[self._N_TRAIN :][FEATURES].values
-        y_test = df.iloc[self._N_TRAIN :]["vref_V"].values
+        X_train = df.iloc[:self._N_TRAIN][FEATURES].values
+        y_train = df.iloc[:self._N_TRAIN]["vref_V"].values
+        X_test = df.iloc[self._N_TRAIN:][FEATURES].values
+        y_test = df.iloc[self._N_TRAIN:]["vref_V"].values
 
         model = GaussianProcessSurrogate(n_restarts=3)
         model.fit(X_train, y_train)
@@ -273,7 +273,7 @@ class TestSurrogateAccuracy20Points:
 
         errors_mV = np.abs(mean - y_test) * 1000
         accuracy = float((errors_mV <= self._TOLERANCE_MV).mean())
-        confidence = "High" if accuracy >= 0.90 else "Medium" if accuracy >= 0.70 else "Low"
+        confidence = accuracy_confidence(accuracy)
         # With 200 training points the GP should reliably achieve High confidence
         assert confidence in ("High", "Medium"), (
             f"Confidence {confidence} is too low: accuracy={accuracy:.0%}"
