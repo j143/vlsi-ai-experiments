@@ -122,15 +122,17 @@ test.describe('Optimization tab controls', () => {
   });
 
   test('live estimate panel is present', async ({ page }) => {
-    await expect(page.getByText('Live estimate')).toBeVisible();
+    // The Spec Targets card always shows the Vref spec bar label
+    await expect(page.getByText('Vref (mV)').first()).toBeVisible();
   });
 
   test('live estimate shows Vref after status loads', async ({ page }) => {
-    // Wait for the live estimate to populate (the effect fires after status resolves)
-    await expect(page.getByText(/Vref:/)).toBeVisible({ timeout: 10_000 });
-    // The value should not be "—" once the estimate arrives
-    const vrefText = await page.getByText(/Vref:/).textContent();
-    expect(vrefText).toMatch(/mV|—/);
+    // Wait for the live status indicator — appears once the surrogate estimate arrives
+    await expect(
+      page.getByText(/Live from surrogate|Estimating/)
+    ).toBeVisible({ timeout: 10_000 });
+    // At least one spec bar should show a numeric value (e.g. "1187.5 mV")
+    await expect(page.getByText(/\d+\.\d+ mV/).first()).toBeVisible({ timeout: 3_000 });
   });
 
   test('Run Optimizer button is enabled after status loads', async ({ page }) => {

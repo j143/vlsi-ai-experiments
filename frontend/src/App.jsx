@@ -334,32 +334,44 @@ function SpecBar({ spec, liveValue, specPass }) {
   );
 }
 
-/** Model confidence badge, driven by /api/accuracy result. */
-function ModelConfidenceBadge({ accuracyData }) {
+/** Model confidence badge — shows synthetic and (optionally) real SKY130 accuracy. */
+function ModelConfidenceBadge({ accuracyData, realAccuracyData }) {
   if (!accuracyData) return null;
-  const { confidence, accuracy_pct, mean_error_mV } = accuracyData;
-  const color = confidence === 'High' ? '#6ee7b7' : confidence === 'Medium' ? '#fbbf24' : '#fca5a5';
-  const bg = confidence === 'High' ? '#064e3b' : confidence === 'Medium' ? '#78350f' : '#7f1d1d';
+
+  const chipFor = (data, label) => {
+    if (!data) return null;
+    const { confidence, accuracy_pct, mean_error_mV } = data;
+    const color = confidence === 'High' ? '#6ee7b7' : confidence === 'Medium' ? '#fbbf24' : '#fca5a5';
+    const bg = confidence === 'High' ? '#064e3b' : confidence === 'Medium' ? '#78350f' : '#7f1d1d';
+    return (
+      <div
+        key={label}
+        title={`${label}: ${accuracy_pct}% of test points within ±10 mV\nMean error: ${mean_error_mV} mV`}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '0.3rem',
+          padding: '0.15rem 0.5rem',
+          borderRadius: '0.3rem',
+          backgroundColor: bg,
+          border: `1px solid ${color}40`,
+          cursor: 'help',
+        }}
+      >
+        <span style={{ fontSize: '0.6rem', color, fontWeight: '700', textTransform: 'uppercase' }}>
+          {label} {confidence}
+        </span>
+        <span style={{ fontSize: '0.6rem', color: color + 'cc' }}>
+          {accuracy_pct}%
+        </span>
+      </div>
+    );
+  };
+
   return (
-    <div
-      title={`GP surrogate: ${accuracy_pct}% of test points within ±10 mV\nMean error: ${mean_error_mV} mV`}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: '0.3rem',
-        padding: '0.15rem 0.5rem',
-        borderRadius: '0.3rem',
-        backgroundColor: bg,
-        border: `1px solid ${color}40`,
-        cursor: 'help',
-      }}
-    >
-      <span style={{ fontSize: '0.6rem', color, fontWeight: '700', textTransform: 'uppercase' }}>
-        Model {confidence}
-      </span>
-      <span style={{ fontSize: '0.6rem', color: color + 'cc' }}>
-        {accuracy_pct}%
-      </span>
+    <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+      {chipFor(accuracyData, 'Synth')}
+      {chipFor(realAccuracyData, 'Real')}
     </div>
   );
 }
@@ -549,7 +561,7 @@ function LayoutViewer({ layer, layoutData }) {
 
 // --- Tab views ---
 
-function OptimizationTab({ isSimulating, onRun, onQuickDesign, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult, liveEstimate, isEstimating, estimateError, cornerData, overallStatus, onExportNetlist, presets, activePreset, onSelectPreset, accuracyData }) {
+function OptimizationTab({ isSimulating, onRun, onQuickDesign, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult, liveEstimate, isEstimating, estimateError, cornerData, overallStatus, onExportNetlist, presets, activePreset, onSelectPreset, accuracyData, realAccuracyData }) {
   const displayCandidates = candidates || CANDIDATES;
   const displayConvergence = convergenceData?.length ? convergenceData : CONVERGENCE;
   const anyPass = displayCandidates.some((c) => c.status === 'pass');
@@ -582,7 +594,9 @@ function OptimizationTab({ isSimulating, onRun, onQuickDesign, selectedCandidate
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <Crosshair size={13} />Spec Targets
             </span>
-            {accuracyData && <ModelConfidenceBadge accuracyData={accuracyData} />}
+            {accuracyData && (
+              <ModelConfidenceBadge accuracyData={accuracyData} realAccuracyData={realAccuracyData} />
+            )}
           </div>
           {SPECS.map((s) => (
             <SpecBar
@@ -1063,6 +1077,7 @@ export default function App() {
   const [presets, setPresets] = useState([]);
   const [activePreset, setActivePreset] = useState(null);
   const [accuracyData, setAccuracyData] = useState(null);
+  const [realAccuracyData, setRealAccuracyData] = useState(null);
 
   const fetchApiJson = useCallback(async (path, options = {}, allowFallback = true) => {
     const bases = [apiBase, ...(allowFallback && apiBase !== FALLBACK_API_BASE ? [FALLBACK_API_BASE] : [])];
@@ -1121,9 +1136,14 @@ export default function App() {
       .catch(() => {/* presets are optional */});
 
     // Fetch surrogate accuracy quality metric (n_train=50 for speed on mount)
-    fetchApiJson('/accuracy?n_test=10&n_train=50&seed=42')
+    fetchApiJson('/accuracy?n_test=10&n_train=50&seed=42&source=synthetic')
       .then((data) => setAccuracyData(data))
       .catch(() => {/* accuracy badge is optional */});
+
+    // Fetch real-data accuracy in the background (larger training set, uses SKY130 CSV)
+    fetchApiJson('/accuracy?n_test=20&n_train=80&seed=42&source=real')
+      .then((data) => setRealAccuracyData(data))
+      .catch(() => {/* real accuracy is optional — only available when CSV present */});
   }, [fetchApiJson]);
 
   // Scroll log panel to bottom when new results arrive
@@ -1512,6 +1532,7 @@ export default function App() {
               activePreset={activePreset}
               onSelectPreset={setActivePreset}
               accuracyData={accuracyData}
+              realAccuracyData={realAccuracyData}
             />
           )}
           {activeTab === 'layout' && (

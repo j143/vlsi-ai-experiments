@@ -286,6 +286,55 @@ class TestAccuracy:
         data = resp.get_json()
         assert data["mean_error_mV"] >= 0.0
 
+    def test_source_field_defaults_to_synthetic(self, client):
+        resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=42")
+        data = resp.get_json()
+        assert data["source"] == "synthetic"
+
+    def test_source_synthetic_explicit(self, client):
+        resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=42&source=synthetic")
+        data = resp.get_json()
+        assert resp.status_code == 200
+        assert data["source"] == "synthetic"
+
+    def test_source_real_returns_200(self, client):
+        """GET /api/accuracy?source=real should succeed when the CSV exists."""
+        resp = client.get("/api/accuracy?source=real&n_test=40&n_train=320&seed=42")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["ok"] is True
+        assert data["source"] == "real"
+        for key in ("accuracy_pct", "mean_error_mV", "confidence"):
+            assert key in data, f"Missing key: {key}"
+
+    def test_source_real_high_accuracy(self, client):
+        """Surrogate trained on SKY130 reference data should achieve Medium or better accuracy.
+
+        The dataset is a 600-row LHS+corners sweep produced by the analytical
+        Brokaw formula over the full parameter space.  A GP trained on 320 of
+        those rows can predict the remaining held-out rows to within ±10 mV with
+        ≥80% accuracy, which maps to the 'Medium' or 'High' confidence label.
+        """
+        resp = client.get("/api/accuracy?source=real&n_test=40&n_train=320&seed=42")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["accuracy_pct"] >= 80.0, (
+            f"Real-data accuracy {data['accuracy_pct']}% is below 80% — "
+            "the GP surrogate is not fitting the SKY130 reference sweep well."
+        )
+        assert data["confidence"] in ("High", "Medium"), (
+            f"Confidence '{data['confidence']}' is too low for real-data evaluation"
+        )
+
+    def test_source_real_mean_error_small(self, client):
+        """Mean error on real data should stay below 100 mV."""
+        resp = client.get("/api/accuracy?source=real&n_test=40&n_train=320&seed=0")
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data["mean_error_mV"] < 100.0, (
+            f"Mean error {data['mean_error_mV']} mV is too large for real-data evaluation"
+        )
+
 
 class TestPresets:
     """Tests for GET /api/presets — design preset configurations."""

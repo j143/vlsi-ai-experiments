@@ -47,6 +47,8 @@ from flask_cors import CORS
 _REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_REPO_ROOT))
 
+_DATASETS_DIR = _REPO_ROOT / "datasets"
+
 from bandgap.runner import BandgapRunner, NETLIST_TEMPLATE, _render_netlist  # noqa: E402
 from layout.data_stub import LAYER_MAP, PatchConfig, generate_synthetic_patch  # noqa: E402
 from layout.evaluate import run_drc  # noqa: E402
@@ -317,10 +319,12 @@ def optimize():
     early_stop = bool(body.get("early_stop", False))
     # Accept preset id; preset values are used as defaults (body overrides them)
     preset = _resolve_preset(body.get("preset"))
+    weights = None
     if preset:
         budget = int(body.get("budget", preset["budget"]))
         n_init = int(body.get("n_init", preset["n_init"]))
         early_stop = bool(body.get("early_stop", preset.get("early_stop", False)))
+        weights = preset.get("weights")
 
     budget = max(1, min(budget, _MAX_BUDGET))  # prevent excessive computation
     n_init = max(1, min(n_init, budget))
@@ -347,6 +351,7 @@ def optimize():
         runner = _get_runner(use_synthetic=use_synthetic)
         opt = BayesianOptimizer(
             runner=runner, budget=budget, n_init=n_init, early_stop=early_stop,
+            weights=weights,
         )
         result = opt.run(seed=seed)
     except Exception as exc:
@@ -400,12 +405,14 @@ def optimize_stream():
     early_stop = _parse_bool(request.args.get("early_stop"), default=False)
     # Accept preset id; preset values are used as defaults (query params override)
     preset = _resolve_preset(request.args.get("preset"))
+    weights = None
     if preset:
         budget = int(request.args.get("budget", preset["budget"]))
         n_init = int(request.args.get("n_init", preset["n_init"]))
         early_stop = _parse_bool(
             request.args.get("early_stop"), default=preset.get("early_stop", False)
         )
+        weights = preset.get("weights")
 
     budget = max(1, min(budget, _MAX_BUDGET))
     n_init = max(1, min(n_init, budget))
@@ -438,6 +445,7 @@ def optimize_stream():
                 runner = _get_runner(use_synthetic=use_synthetic)
                 opt = BayesianOptimizer(
                     runner=runner, budget=budget, n_init=n_init, early_stop=early_stop,
+                    weights=weights,
                 )
 
                 def on_progress(entry: dict, summary: dict) -> None:
@@ -504,13 +512,15 @@ def optimize_stream():
 
 @app.get("/api/accuracy")
 def accuracy():
-    """Evaluate surrogate accuracy against synthetic ground truth.
+    """Evaluate surrogate accuracy against synthetic or real SKY130 ground truth.
 
-    Trains a GP surrogate on *n_train* synthetic Brokaw-formula samples,
-    then evaluates on *n_test* held-out samples.  Reports the fraction of
-    test points where |surrogate_vref − ground_truth_vref| ≤ tolerance_mV.
+    Trains a GP surrogate on *n_train* samples, then evaluates on *n_test*
+    held-out samples.  Reports the fraction of test points where
+    |surrogate_vref − ground_truth_vref| ≤ tolerance_mV.
 
     Query params (all optional):
+      - source (str, default "synthetic"): "synthetic" uses the Brokaw formula;
+        "real" uses datasets/bandgap_sweep_real_sky130.csv.
       - n_test (int, default 20): held-out evaluation points.
       - n_train (int, default 200): training set size.
       - seed (int, default 42): random seed for reproducibility.
@@ -520,6 +530,7 @@ def accuracy():
 
         {
             "ok": true,
+            "source": "synthetic",
             "n_test": 20,
             "n_train": 200,
             "tolerance_mV": 10.0,
@@ -529,6 +540,7 @@ def accuracy():
             "confidence": "High"
         }
     """
+    source = request.args.get("source", "synthetic").lower()
     n_test = max(5, min(int(request.args.get("n_test", 20)), 100))
     n_train = max(20, min(int(request.args.get("n_train", 200)), 500))
     seed = int(request.args.get("seed", 42))
@@ -541,10 +553,34 @@ def accuracy():
             FEATURES,
             accuracy_confidence,
         )
+        import pandas as pd  # noqa: PLC0415
 
-        df_all = _generate_synthetic_data(n=n_train + n_test, seed=seed)
-        df_train = df_all.iloc[:n_train]
-        df_test = df_all.iloc[n_train:]
+        if source == "real":
+            csv_path = _DATASETS_DIR / "bandgap_sweep_real_sky130.csv"
+            if not csv_path.exists():
+                return Response(
+                    json.dumps({"error": "Real SKY130 dataset not found. Run data generation first."}),
+                    status=404,
+                    mimetype="application/json",
+                )
+            df_all = pd.read_csv(csv_path)
+            # Drop rows with missing or non-physical vref (plausible range: 0–3.5 V)
+            df_all = df_all.dropna(subset=["vref_V"])
+            df_all = df_all[(df_all["vref_V"] >= 0.0) & (df_all["vref_V"] < 3.5)]
+            if len(df_all) < n_train + n_test:
+                # Use all available rows; adjust sizes proportionally
+                total = len(df_all)
+                n_train = max(5, total * n_train // (n_train + n_test))
+                n_test = max(5, total - n_train)
+            rng = np.random.default_rng(seed)
+            idx = rng.permutation(len(df_all))
+            df_train = df_all.iloc[idx[:n_train]]
+            df_test = df_all.iloc[idx[n_train:n_train + n_test]]
+        else:
+            source = "synthetic"  # normalise any unrecognised value
+            df_all = _generate_synthetic_data(n=n_train + n_test, seed=seed)
+            df_train = df_all.iloc[:n_train]
+            df_test = df_all.iloc[n_train:]
 
         X_train = df_train[FEATURES].values
         y_train = df_train["vref_V"].values
@@ -563,14 +599,15 @@ def accuracy():
         confidence = accuracy_confidence(within_tol)
 
         logger.info(
-            "Surrogate accuracy: %.0f%% within ±%.0f mV (%d test pts)",
-            within_tol * 100, tolerance_mV, n_test,
+            "Surrogate accuracy [%s]: %.0f%% within ±%.0f mV (%d test pts)",
+            source, within_tol * 100, tolerance_mV, n_test,
         )
 
         return _safe_json({
             "ok": True,
-            "n_test": n_test,
-            "n_train": n_train,
+            "source": source,
+            "n_test": int(n_test),
+            "n_train": int(n_train),
             "tolerance_mV": tolerance_mV,
             "accuracy_pct": round(within_tol * 100, 1),
             "mean_error_mV": round(mean_error_mV, 2),
@@ -601,6 +638,7 @@ _PRESETS = [
         "budget": 30,
         "n_init": 10,
         "early_stop": False,
+        "weights": {"vref": 1.0, "iq": 0.3, "psrr": 0.2},
     },
     {
         "id": "low_power",
@@ -609,6 +647,7 @@ _PRESETS = [
         "budget": 25,
         "n_init": 8,
         "early_stop": False,
+        "weights": {"vref": 1.0, "iq": 1.5, "psrr": 0.2},
     },
     {
         "id": "tight_vref",
@@ -617,6 +656,7 @@ _PRESETS = [
         "budget": 40,
         "n_init": 12,
         "early_stop": False,
+        "weights": {"vref": 2.0, "iq": 0.1, "psrr": 0.1},
     },
 ]
 
