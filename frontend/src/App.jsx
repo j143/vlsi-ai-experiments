@@ -220,6 +220,150 @@ function SliderRow({ varDef, value, onChange }) {
   );
 }
 
+/**
+ * SpecBar — a big, colored progress bar per spec metric.
+ *
+ * Shows: name, live value (if available), target constraint, and a PASS/WARN/FAIL
+ * badge plus a color-coded fill bar that reflects how close to the limit we are.
+ */
+function SpecBar({ spec, liveValue, specPass }) {
+  // Determine status and fill fraction [0, 1].
+  // fill=1 → excellent (well within spec), fill=0 → very bad.
+  let status = 'unknown';
+  let fillPct = 40; // neutral grey when no data
+
+  if (liveValue != null) {
+    if (spec.direction === 'target') {
+      const err = Math.abs(liveValue - spec.target);
+      if (err <= spec.tol) {
+        status = 'pass';
+        fillPct = Math.round(100 - (err / spec.tol) * 50);
+      } else if (err <= spec.tol * 2) {
+        status = 'warn';
+        fillPct = 30;
+      } else {
+        status = 'fail';
+        fillPct = 10;
+      }
+    } else if (spec.direction === 'max') {
+      if (liveValue <= spec.target) {
+        status = 'pass';
+        fillPct = Math.max(10, Math.round(100 - (liveValue / spec.target) * 80));
+      } else if (liveValue <= spec.target * 1.2) {
+        status = 'warn';
+        fillPct = 20;
+      } else {
+        status = 'fail';
+        fillPct = 5;
+      }
+    } else if (spec.direction === 'min') {
+      // PSRR: spec.target=-60, liveValue=-61.2 (more negative = better).
+      // Pass when |liveValue| >= |spec.target|.
+      const absVal = Math.abs(liveValue);
+      const absTarget = Math.abs(spec.target);
+      if (absVal >= absTarget) {
+        status = 'pass';
+        fillPct = Math.min(100, Math.round((absVal / absTarget) * 80));
+      } else if (absVal >= absTarget * 0.8) {
+        status = 'warn';
+        fillPct = 25;
+      } else {
+        status = 'fail';
+        fillPct = 5;
+      }
+    }
+    // Override with explicit spec_pass bool if available
+    if (specPass != null) {
+      status = specPass ? 'pass' : (status === 'warn' ? 'warn' : 'fail');
+    }
+  }
+
+  const barColor = status === 'pass' ? '#6ee7b7'
+    : status === 'warn' ? '#fbbf24'
+    : status === 'fail' ? '#fca5a5'
+    : '#475569';
+  const bgColor = status === 'pass' ? '#064e3b'
+    : status === 'warn' ? '#78350f'
+    : status === 'fail' ? '#7f1d1d'
+    : '#1e293b';
+
+  const constraint = spec.direction === 'max'
+    ? `≤${spec.target} ${spec.unit}`
+    : spec.direction === 'min'
+      ? `≥${Math.abs(spec.target)} ${spec.unit}`
+      : `${spec.target}±${spec.tol} ${spec.unit}`;
+
+  const displayVal = liveValue != null
+    ? `${liveValue.toFixed(1)} ${spec.unit}`
+    : null;
+
+  return (
+    <div style={{ padding: '0.5rem 0', borderBottom: '1px solid #0f172a' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.3rem', alignItems: 'center' }}>
+        <span style={S.label}>{spec.label}</span>
+        <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+          {displayVal && (
+            <strong style={{ fontSize: '0.75rem', color: barColor }}>{displayVal}</strong>
+          )}
+          <span style={{ fontSize: '0.65rem', color: '#475569' }}>{constraint}</span>
+          {status !== 'unknown' && (
+            <span style={{
+              padding: '0.1rem 0.3rem',
+              borderRadius: '0.2rem',
+              fontSize: '0.6rem',
+              fontWeight: '700',
+              backgroundColor: bgColor,
+              color: barColor,
+            }}>
+              {status.toUpperCase()}
+            </span>
+          )}
+        </div>
+      </div>
+      <div style={{ height: '5px', backgroundColor: '#0f172a', borderRadius: '3px', overflow: 'hidden' }}>
+        <div style={{
+          height: '100%',
+          width: `${fillPct}%`,
+          backgroundColor: barColor,
+          borderRadius: '3px',
+          transition: 'all 0.4s ease',
+          opacity: liveValue != null ? 0.85 : 0.3,
+        }} />
+      </div>
+    </div>
+  );
+}
+
+/** Model confidence badge, driven by /api/accuracy result. */
+function ModelConfidenceBadge({ accuracyData }) {
+  if (!accuracyData) return null;
+  const { confidence, accuracy_pct, mean_error_mV } = accuracyData;
+  const color = confidence === 'High' ? '#6ee7b7' : confidence === 'Medium' ? '#fbbf24' : '#fca5a5';
+  const bg = confidence === 'High' ? '#064e3b' : confidence === 'Medium' ? '#78350f' : '#7f1d1d';
+  return (
+    <div
+      title={`GP surrogate: ${accuracy_pct}% of test points within ±10 mV\nMean error: ${mean_error_mV} mV`}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '0.3rem',
+        padding: '0.15rem 0.5rem',
+        borderRadius: '0.3rem',
+        backgroundColor: bg,
+        border: `1px solid ${color}40`,
+        cursor: 'help',
+      }}
+    >
+      <span style={{ fontSize: '0.6rem', color, fontWeight: '700', textTransform: 'uppercase' }}>
+        Model {confidence}
+      </span>
+      <span style={{ fontSize: '0.6rem', color: color + 'cc' }}>
+        {accuracy_pct}%
+      </span>
+    </div>
+  );
+}
+
 function SpecRow({ spec }) {
   const constraint = spec.direction === 'max'
     ? `≤${spec.target} ${spec.unit}`
@@ -244,19 +388,24 @@ function SpecRow({ spec }) {
 }
 
 function CandidateRow({ c, selected, onClick, bestEffort }) {
+  // bestEffort=true → no candidate is in spec, this is the "best so far"
+  const inSpec = c.status === 'pass';
+  const borderColor = selected ? '#38bdf8' : bestEffort ? '#fbbf24' : 'transparent';
+  const label = inSpec ? 'IN SPEC' : bestEffort ? 'BEST' : 'OUT';
+  const labelStatus = inSpec ? 'pass' : bestEffort ? 'warn' : 'fail';
   return (
     <div
       onClick={onClick}
       style={{
         display: 'grid',
-        gridTemplateColumns: '70px 1fr 55px 55px 60px 50px',
+        gridTemplateColumns: '70px 1fr 55px 55px 60px 60px',
         gap: '0.5rem',
         alignItems: 'center',
         padding: '0.5rem 0.625rem',
         borderRadius: '0.375rem',
         cursor: 'pointer',
         backgroundColor: selected ? '#0f172a' : 'transparent',
-        borderLeft: selected ? '2px solid #38bdf8' : bestEffort ? '2px solid #fbbf24' : '2px solid transparent',
+        borderLeft: `2px solid ${borderColor}`,
         marginBottom: '0.25rem',
       }}
     >
@@ -266,7 +415,7 @@ function CandidateRow({ c, selected, onClick, bestEffort }) {
       <span style={{ fontSize: '0.7rem', color: '#94a3b8', textAlign: 'right' }}>{c.err_mV != null ? `±${c.err_mV}` : c.spice}</span>
       <span style={{ fontSize: '0.7rem', color: '#94a3b8', textAlign: 'right' }}>{c.power}</span>
       <div style={{ display: 'flex', justifyContent: 'center' }}>
-        <span style={S.badge(bestEffort ? 'warn' : c.status)}>{bestEffort ? 'best' : c.status}</span>
+        <span style={S.badge(labelStatus)}>{label}</span>
       </div>
     </div>
   );
@@ -400,7 +549,7 @@ function LayoutViewer({ layer, layoutData }) {
 
 // --- Tab views ---
 
-function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult, liveEstimate, isEstimating, estimateError, cornerData, overallStatus, onExportNetlist }) {
+function OptimizationTab({ isSimulating, onRun, onQuickDesign, selectedCandidate, setSelectedCandidate, designValues, setDesignValues, candidates, convergenceData, optimResult, liveEstimate, isEstimating, estimateError, cornerData, overallStatus, onExportNetlist, presets, activePreset, onSelectPreset, accuracyData }) {
   const displayCandidates = candidates || CANDIDATES;
   const displayConvergence = convergenceData?.length ? convergenceData : CONVERGENCE;
   const anyPass = displayCandidates.some((c) => c.status === 'pass');
@@ -408,13 +557,51 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
   const lastEntry = displayConvergence[displayConvergence.length - 1];
   const bestLoss = lastEntry?.loss ?? lastEntry?.best_error_V;
   const convergedAt = displayConvergence.length;
+
+  // Map live estimate fields to each spec
+  const specLiveValues = {
+    vref: liveEstimate?.vref_mV,
+    tc: liveEstimate?.tc_ppm_C,
+    psrr: liveEstimate?.psrr_dB,
+    iq: liveEstimate?.iq_uA,
+  };
+  const specPassValues = {
+    vref: liveEstimate?.spec_vref,
+    tc: liveEstimate?.spec_tc,
+    psrr: liveEstimate?.spec_psrr,
+    iq: liveEstimate?.spec_iq,
+  };
+
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '260px 1fr 300px', gap: '1rem', minHeight: '0' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: '270px 1fr 300px', gap: '1rem', minHeight: '0' }}>
       {/* Left: Controls */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        {/* Spec Targets with live colored bars */}
         <div style={S.card()}>
-          <div style={S.cardTitle}><Crosshair size={13} />Spec Targets</div>
-          {SPECS.map((s) => <SpecRow key={s.id} spec={s} />)}
+          <div style={{ ...S.cardTitle, justifyContent: 'space-between' }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <Crosshair size={13} />Spec Targets
+            </span>
+            {accuracyData && <ModelConfidenceBadge accuracyData={accuracyData} />}
+          </div>
+          {SPECS.map((s) => (
+            <SpecBar
+              key={s.id}
+              spec={s}
+              liveValue={specLiveValues[s.id]}
+              specPass={specPassValues[s.id]}
+            />
+          ))}
+          {liveEstimate && (
+            <div style={{ marginTop: '0.5rem', fontSize: '0.65rem', color: '#475569', textAlign: 'right' }}>
+              {isEstimating ? '⟳ Estimating…' : '↺ Live from surrogate'}
+            </div>
+          )}
+          {estimateError && (
+            <div style={{ ...S.label, color: '#fbbf24', marginTop: '0.25rem', fontSize: '0.65rem' }}>
+              ⚠ {estimateError}
+            </div>
+          )}
         </div>
 
         <div style={S.card({ flex: 1 })}>
@@ -427,22 +614,46 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
               onChange={(val) => setDesignValues((prev) => ({ ...prev, [v.id]: val }))}
             />
           ))}
-          <div style={{ backgroundColor: '#0f172a', borderRadius: '0.375rem', padding: '0.5rem 0.625rem', marginTop: '0.25rem' }}>
-            <div style={{ ...S.label, marginBottom: '0.25rem' }}>
-              Live estimate {isEstimating ? '(updating...)' : ''}
+
+          {/* Presets */}
+          {presets?.length > 0 && (
+            <div style={{ marginTop: '0.5rem' }}>
+              <div style={{ ...S.label, marginBottom: '0.375rem', fontSize: '0.65rem', color: '#475569' }}>
+                QUICK PRESETS
+              </div>
+              <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
+                {presets.map((p) => (
+                  <button
+                    key={p.id}
+                    title={p.description}
+                    onClick={() => onSelectPreset(p)}
+                    style={S.btn(activePreset?.id === p.id ? 'primary' : 'secondary', {
+                      fontSize: '0.65rem',
+                      padding: '0.2rem 0.5rem',
+                    })}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-              <span style={S.label}>Vref: <strong style={{ color: '#38bdf8' }}>{liveEstimate?.vref_mV != null ? `${liveEstimate.vref_mV.toFixed(1)} mV` : '—'}</strong></span>
-              <span style={S.label}>Iq: <strong style={{ color: '#38bdf8' }}>{liveEstimate?.iq_uA != null ? `${liveEstimate.iq_uA.toFixed(2)} µA` : '—'}</strong></span>
-              <span style={S.label}>Vref Spec: <strong style={{ color: liveEstimate?.spec_vref ? '#6ee7b7' : '#fca5a5' }}>{liveEstimate?.spec_vref == null ? '—' : liveEstimate.spec_vref ? 'PASS' : 'FAIL'}</strong></span>
+          )}
+
+          <div style={{ marginTop: 'auto', paddingTop: '0.75rem', display: 'flex', gap: '0.5rem', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', gap: '0.5rem' }}>
+              <button style={S.btn('primary', { flex: 1 })} onClick={onRun} disabled={isSimulating}>
+                {isSimulating ? <RefreshCw size={13} /> : <Play size={13} />}
+                {isSimulating ? 'Running…' : 'Run Optimizer'}
+              </button>
+              <button
+                title="Quick Design: budget=15, stops when Vref spec met"
+                style={S.btn('secondary', { whiteSpace: 'nowrap' })}
+                onClick={onQuickDesign}
+                disabled={isSimulating}
+              >
+                ⚡ Quick
+              </button>
             </div>
-            {estimateError && <div style={{ ...S.label, color: '#fbbf24', marginTop: '0.25rem' }}>{estimateError}</div>}
-          </div>
-          <div style={{ marginTop: 'auto', paddingTop: '0.75rem', display: 'flex', gap: '0.5rem' }}>
-            <button style={S.btn('primary', { flex: 1 })} onClick={onRun} disabled={isSimulating}>
-              {isSimulating ? <RefreshCw size={13} /> : <Play size={13} />}
-              {isSimulating ? 'Running…' : 'Run Optimizer'}
-            </button>
           </div>
         </div>
       </div>
@@ -454,13 +665,20 @@ function OptimizationTab({ isSimulating, onRun, selectedCandidate, setSelectedCa
             <span style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
               <TrendingUp size={13} />Top Candidates
             </span>
-            <button style={S.btn('secondary', { fontSize: '0.7rem', padding: '0.2rem 0.5rem' })}>
-              <Save size={11} />Export
-            </button>
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+              {!anyPass && displayCandidates.length > 0 && optimResult && (
+                <span style={{ fontSize: '0.65rem', color: '#fbbf24' }}>
+                  ⚠ None in spec — showing best so far
+                </span>
+              )}
+              <button style={S.btn('secondary', { fontSize: '0.7rem', padding: '0.2rem 0.5rem' })}>
+                <Save size={11} />Export
+              </button>
+            </div>
           </div>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: '70px 1fr 55px 55px 60px 50px',
+            gridTemplateColumns: '70px 1fr 55px 55px 60px 60px',
             gap: '0.5rem',
             padding: '0 0.625rem 0.375rem',
             borderBottom: '1px solid #334155',
@@ -841,6 +1059,11 @@ export default function App() {
   const logRef = useRef(null);
   const streamRef = useRef(null);
 
+  // --- Presets & accuracy quality metric ---
+  const [presets, setPresets] = useState([]);
+  const [activePreset, setActivePreset] = useState(null);
+  const [accuracyData, setAccuracyData] = useState(null);
+
   const fetchApiJson = useCallback(async (path, options = {}, allowFallback = true) => {
     const bases = [apiBase, ...(allowFallback && apiBase !== FALLBACK_API_BASE ? [FALLBACK_API_BASE] : [])];
     let lastErr = null;
@@ -886,6 +1109,21 @@ export default function App() {
         setLayoutError(null);
       })
       .catch(() => setLayoutError('Could not load layout preview'));
+
+    // Fetch design presets
+    fetchApiJson('/presets')
+      .then((data) => {
+        setPresets(data.presets || []);
+        // Default to balanced preset
+        const balanced = data.presets?.find((p) => p.id === 'balanced');
+        if (balanced) setActivePreset(balanced);
+      })
+      .catch(() => {/* presets are optional */});
+
+    // Fetch surrogate accuracy quality metric (n_train=50 for speed on mount)
+    fetchApiJson('/accuracy?n_test=10&n_train=50&seed=42')
+      .then((data) => setAccuracyData(data))
+      .catch(() => {/* accuracy badge is optional */});
   }, [fetchApiJson]);
 
   // Scroll log panel to bottom when new results arrive
@@ -925,8 +1163,13 @@ export default function App() {
 
         setLiveEstimate({
           vref_mV: data.vref_V != null ? data.vref_V * 1000 : null,
+          tc_ppm_C: data.tc_ppm_C ?? null,
           iq_uA: data.iq_uA ?? null,
+          psrr_dB: data.psrr_dB ?? null,
           spec_vref: data.spec_checks?.vref ?? null,
+          spec_tc: data.spec_checks?.tc ?? null,
+          spec_iq: data.spec_checks?.iq ?? null,
+          spec_psrr: data.spec_checks?.psrr ?? null,
         });
       } catch (err) {
         setEstimateError(err.message);
@@ -966,7 +1209,7 @@ export default function App() {
       ]
     : LOG_LINES;
 
-  const handleRunOptimizer = async () => {
+  const handleRunOptimizer = async (opts = {}) => {
     setIsSimulating(true);
     setApiError(null);
     setOptimResult({
@@ -984,10 +1227,16 @@ export default function App() {
       streamRef.current = null;
     }
 
+    const preset = opts.preset ?? activePreset;
+    const budget = opts.quick ? 15 : (preset?.budget ?? 50);
+    const n_init = opts.quick ? 5 : (preset?.n_init ?? 10);
+    const early_stop = opts.quick ? true : false;
+
     const query = new URLSearchParams({
-      budget: '50',
-      n_init: '10',
+      budget: String(budget),
+      n_init: String(n_init),
       seed: '42',
+      early_stop: String(early_stop),
       // Use synthetic runner whenever ngspice is not explicitly confirmed available.
       use_synthetic: serverStatus.ngspice_available !== true ? 'true' : 'false',
     });
@@ -1245,6 +1494,7 @@ export default function App() {
             <OptimizationTab
               isSimulating={isSimulating}
               onRun={handleRunOptimizer}
+              onQuickDesign={() => handleRunOptimizer({ quick: true })}
               selectedCandidate={selectedCandidate}
               setSelectedCandidate={setSelectedCandidate}
               designValues={designValues}
@@ -1258,6 +1508,10 @@ export default function App() {
               cornerData={liveCornerData}
               overallStatus={overallStatus}
               onExportNetlist={handleExportNetlist}
+              presets={presets}
+              activePreset={activePreset}
+              onSelectPreset={setActivePreset}
+              accuracyData={accuracyData}
             />
           )}
           {activeTab === 'layout' && (

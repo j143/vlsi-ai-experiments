@@ -169,6 +169,13 @@ def _parse_bool(value: str | None, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _resolve_preset(preset_id: str | None) -> dict | None:
+    """Return the preset dict for *preset_id*, or *None* if not found."""
+    if not preset_id:
+        return None
+    return next((p for p in _PRESETS if p["id"] == preset_id), None)
+
+
 # ---------------------------------------------------------------------------
 # /api/status
 # ---------------------------------------------------------------------------
@@ -309,13 +316,11 @@ def optimize():
     use_synthetic = bool(body.get("use_synthetic", False))
     early_stop = bool(body.get("early_stop", False))
     # Accept preset id; preset values are used as defaults (body overrides them)
-    preset_id = body.get("preset")
-    if preset_id:
-        preset = next((p for p in _PRESETS if p["id"] == preset_id), None)
-        if preset:
-            budget = int(body.get("budget", preset["budget"]))
-            n_init = int(body.get("n_init", preset["n_init"]))
-            early_stop = bool(body.get("early_stop", preset.get("early_stop", False)))
+    preset = _resolve_preset(body.get("preset"))
+    if preset:
+        budget = int(body.get("budget", preset["budget"]))
+        n_init = int(body.get("n_init", preset["n_init"]))
+        early_stop = bool(body.get("early_stop", preset.get("early_stop", False)))
 
     budget = max(1, min(budget, _MAX_BUDGET))  # prevent excessive computation
     n_init = max(1, min(n_init, budget))
@@ -394,15 +399,13 @@ def optimize_stream():
     use_synthetic = _parse_bool(request.args.get("use_synthetic"), default=False)
     early_stop = _parse_bool(request.args.get("early_stop"), default=False)
     # Accept preset id; preset values are used as defaults (query params override)
-    preset_id = request.args.get("preset")
-    if preset_id:
-        preset = next((p for p in _PRESETS if p["id"] == preset_id), None)
-        if preset:
-            budget = int(request.args.get("budget", preset["budget"]))
-            n_init = int(request.args.get("n_init", preset["n_init"]))
-            early_stop = _parse_bool(
-                request.args.get("early_stop"), default=preset.get("early_stop", False)
-            )
+    preset = _resolve_preset(request.args.get("preset"))
+    if preset:
+        budget = int(request.args.get("budget", preset["budget"]))
+        n_init = int(request.args.get("n_init", preset["n_init"]))
+        early_stop = _parse_bool(
+            request.args.get("early_stop"), default=preset.get("early_stop", False)
+        )
 
     budget = max(1, min(budget, _MAX_BUDGET))
     n_init = max(1, min(n_init, budget))
@@ -532,7 +535,12 @@ def accuracy():
     tolerance_mV = float(request.args.get("tolerance_mV", 10.0))
 
     try:
-        from ml.surrogate import GaussianProcessSurrogate, _generate_synthetic_data, FEATURES  # noqa: PLC0415
+        from ml.surrogate import (  # noqa: PLC0415
+            GaussianProcessSurrogate,
+            _generate_synthetic_data,
+            FEATURES,
+            accuracy_confidence,
+        )
 
         df_all = _generate_synthetic_data(n=n_train + n_test, seed=seed)
         df_train = df_all.iloc[:n_train]
@@ -552,12 +560,7 @@ def accuracy():
         mean_error_mV = float(errors_mV.mean())
         mean_std_mV = float(std.mean() * 1000)
 
-        if within_tol >= 0.90:
-            confidence = "High"
-        elif within_tol >= 0.70:
-            confidence = "Medium"
-        else:
-            confidence = "Low"
+        confidence = accuracy_confidence(within_tol)
 
         logger.info(
             "Surrogate accuracy: %.0f%% within ±%.0f mV (%d test pts)",

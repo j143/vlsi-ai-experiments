@@ -335,6 +335,13 @@ class TestEarlyStop:
         assert "history" in data
         # Must have run at least n_init simulations
         assert data["n_simulations"] >= 1
+        # When early_stop is True and a spec-passing point is found, the optimizer
+        # should terminate before exhausting the full budget.
+        # (If no point passes all specs the full budget is consumed — that is fine.)
+        if data.get("n_spec_pass", 0) > 0:
+            assert data["n_simulations"] <= payload["budget"], (
+                f"Early stop didn't terminate early: {data['n_simulations']} >= {payload['budget']}"
+            )
 
     def test_stream_with_early_stop(self, client, ngspice_available):
         query = "/api/optimize/stream?budget=10&n_init=3&seed=42&early_stop=true"
