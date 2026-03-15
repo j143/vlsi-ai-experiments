@@ -175,6 +175,7 @@ class BayesianOptimizer:
         specs_file: Path | str = SPECS_FILE,
         results_dir: Path | str = "results",
         early_stop: bool = False,
+        weights: dict[str, float] | None = None,
     ) -> None:
         self.runner = runner
         self.budget = budget
@@ -183,6 +184,9 @@ class BayesianOptimizer:
         self.xi = xi
         self.results_dir = Path(results_dir)
         self.early_stop = early_stop
+        # Objective weights: vref is primary; iq/psrr/tc are secondary penalties.
+        # Default: vref only (backward-compatible).
+        self.weights = weights or {"vref": 1.0}
 
         with open(specs_file) as f:
             self.specs = yaml.safe_load(f)
@@ -205,7 +209,7 @@ class BayesianOptimizer:
         rng = np.random.default_rng(seed=seed)
         history: list[dict[str, Any]] = []
         X_obs: list[np.ndarray] = []
-        y_obs: list[float] = []  # |vref - target| — we minimize this
+        y_obs: list[float] = []  # weighted scalar loss — we minimize this
         n_sim = 0
         n_pass = 0
         best_error = np.inf
@@ -224,7 +228,7 @@ class BayesianOptimizer:
             n_sim += 1
 
             if entry["vref_V"] is not None:
-                err = abs(entry["vref_V"] - self._vref_target)
+                err = self._weighted_loss(entry)
                 X_obs.append(_params_to_array(params))
                 y_obs.append(err)
                 if entry.get("spec_vref_pass"):
@@ -286,7 +290,7 @@ class BayesianOptimizer:
             n_sim += 1
 
             if entry["vref_V"] is not None:
-                err = abs(entry["vref_V"] - self._vref_target)
+                err = self._weighted_loss(entry)
                 X_obs.append(_params_to_array(candidate_params))
                 y_obs.append(err)
                 if entry.get("spec_vref_pass"):
@@ -296,7 +300,7 @@ class BayesianOptimizer:
                     best_error_std = entry.get("pred_error_std_V")
                     best_params = candidate_params
                     logger.info(
-                        "New best: vref=%.4f V, error=%.4f V (iter %d)",
+                        "New best: vref=%.4f V, loss=%.4f (iter %d)",
                         entry["vref_V"], err, n_sim,
                     )
 
@@ -343,6 +347,49 @@ class BayesianOptimizer:
             n_sim, n_pass, 100 * result.spec_pass_rate(), best_error,
         )
         return result
+
+    def _weighted_loss(self, entry: dict[str, Any]) -> float:
+        """Compute a weighted scalar loss from a simulation log entry.
+
+        Normalises each objective by its spec limit so all terms are in [0, ∞)
+        and the weights (from ``self.weights``) act as relative importance.
+
+        Objectives
+        ----------
+        vref  : |vref_V − target| / tolerance  (normalised absolute error)
+        iq    : max(0, (iq_uA − max_iq) / max_iq)   (only penalises overrun)
+        psrr  : max(0, (min_psrr − |psrr_dB|) / |min_psrr|)
+        tc    : max(0, (tc_ppm_C − max_tc) / max_tc)
+        """
+        w = self.weights
+        loss = 0.0
+
+        vref = entry.get("vref_V")
+        if vref is not None and w.get("vref", 0) > 0:
+            norm_err = abs(vref - self._vref_target) / max(self._vref_tol, 1e-9)
+            loss += w["vref"] * norm_err
+
+        iq_uA = entry.get("iq_uA")
+        if iq_uA is not None and w.get("iq", 0) > 0:
+            max_iq = float(self.specs.get("quiescent_current", {}).get("max_uA", 50.0))
+            iq_overrun = max(0.0, (iq_uA - max_iq) / max(max_iq, 1e-9))
+            loss += w["iq"] * iq_overrun
+
+        psrr_dB = entry.get("psrr_dB")
+        if psrr_dB is not None and w.get("psrr", 0) > 0:
+            min_psrr = float(self.specs.get("psrr", {}).get("min_dc_dB", 60.0))
+            psrr_shortfall = max(0.0, (min_psrr - abs(psrr_dB)) / max(min_psrr, 1e-9))
+            loss += w["psrr"] * psrr_shortfall
+
+        tc_ppm = entry.get("tc_ppm_C")
+        if tc_ppm is not None and w.get("tc", 0) > 0:
+            max_tc = float(
+                self.specs.get("temperature_coefficient", {}).get("max_ppm_C", 20.0)
+            )
+            tc_overrun = max(0.0, (tc_ppm - max_tc) / max(max_tc, 1e-9))
+            loss += w["tc"] * tc_overrun
+
+        return loss
 
     def _simulate_and_log(
         self,
