@@ -241,3 +241,156 @@ class UNetPatchModel:
         self._net.load_state_dict(state)
         self._fitted = True
         logger.info("Model loaded from %s", path)
+
+
+# ---------------------------------------------------------------------------
+# Simple ok/bad patch quality classifier (scikit-learn, no PyTorch needed)
+# ---------------------------------------------------------------------------
+
+
+class BadPatchClassifier:
+    """Binary classifier that labels layout patches as *ok* (0) or *bad* (1).
+
+    Uses hand-crafted per-layer statistics as features and a scikit-learn
+    estimator for classification.  Does **not** require PyTorch.
+
+    Feature vector per patch
+    ------------------------
+    - Per-layer pixel density  (L values, fraction of pixels set).
+    - Number of active layers  (1 value).
+    - Total pixel density      (1 value).
+    - Layer co-activation scores for three expected pairs:
+
+      * diffusion ∩ contact
+      * contact   ∩ metal1
+      * poly      ∩ diffusion
+
+    Parameters
+    ----------
+    classifier_type:
+        ``"rf"`` — Random Forest (default), ``"lr"`` — Logistic Regression.
+    random_state:
+        Seed for the underlying estimator.
+    """
+
+    def __init__(
+        self,
+        classifier_type: str = "rf",
+        random_state: int = 42,
+    ) -> None:
+        from sklearn.ensemble import RandomForestClassifier
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import StandardScaler
+
+        self.classifier_type = classifier_type
+        self.random_state = random_state
+
+        if classifier_type == "rf":
+            clf = RandomForestClassifier(n_estimators=100, random_state=random_state)
+        elif classifier_type == "lr":
+            clf = LogisticRegression(random_state=random_state, max_iter=1000)
+        else:
+            raise ValueError(
+                f"Unknown classifier_type: {classifier_type!r}. Choose 'rf' or 'lr'."
+            )
+
+        self._pipeline = Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", clf),
+        ])
+        self._fitted = False
+
+    @staticmethod
+    def extract_features(patches: np.ndarray) -> np.ndarray:
+        """Extract a fixed-length feature vector per patch.
+
+        Parameters
+        ----------
+        patches:
+            Shape (N, L, H, W), dtype uint8 or float.
+
+        Returns
+        -------
+        np.ndarray
+            Shape (N, n_features), dtype float32.
+        """
+        N, L, H, W = patches.shape
+        feature_rows = []
+        for i in range(N):
+            patch = patches[i].astype(np.float32)
+            # Per-layer pixel density.
+            density = patch.mean(axis=(1, 2))          # shape (L,)
+            n_active = float((density > 0.0).sum())    # how many layers are used
+            total_density = float(patch.mean())        # overall fill fraction
+            # Pairwise co-activation (minimum of densities for expected pairs).
+            # Layer indices follow LAYER_MAP in data_stub: 0=diff, 1=poly, 2=contact, 3=metal1.
+            _diff, _poly, _contact, _metal1 = 0, 1, 2, 3
+            co_diff_contact = float(min(density[_diff], density[_contact]))
+            co_contact_metal = float(min(density[_contact], density[_metal1]))
+            co_poly_diff = float(min(density[_poly], density[_diff]))
+            feat = np.concatenate([
+                density,
+                [n_active, total_density, co_diff_contact, co_contact_metal, co_poly_diff],
+            ])
+            feature_rows.append(feat)
+        return np.array(feature_rows, dtype=np.float32)
+
+    def fit(self, patches: np.ndarray, labels: np.ndarray) -> "BadPatchClassifier":
+        """Train the classifier on labelled patches.
+
+        Parameters
+        ----------
+        patches:
+            Shape (N, L, H, W), dtype uint8.
+        labels:
+            Shape (N,), integer labels — 0 = ok, 1 = bad.
+
+        Returns
+        -------
+        self
+        """
+        features = self.extract_features(patches)
+        self._pipeline.fit(features, labels)
+        self._fitted = True
+        logger.info(
+            "BadPatchClassifier fitted on %d samples (%d ok, %d bad)",
+            len(labels), int((labels == 0).sum()), int((labels == 1).sum()),
+        )
+        return self
+
+    def predict(self, patches: np.ndarray) -> np.ndarray:
+        """Predict labels for a batch of patches.
+
+        Parameters
+        ----------
+        patches:
+            Shape (N, L, H, W).
+
+        Returns
+        -------
+        np.ndarray
+            Shape (N,), integer predictions — 0 = ok, 1 = bad.
+        """
+        if not self._fitted:
+            raise RuntimeError("BadPatchClassifier: call fit() before predict().")
+        features = self.extract_features(patches)
+        return self._pipeline.predict(features)
+
+    def predict_proba(self, patches: np.ndarray) -> np.ndarray:
+        """Predict class probabilities.
+
+        Parameters
+        ----------
+        patches:
+            Shape (N, L, H, W).
+
+        Returns
+        -------
+        np.ndarray
+            Shape (N, 2) — columns are [P(ok), P(bad)].
+        """
+        if not self._fitted:
+            raise RuntimeError("BadPatchClassifier: call fit() before predict().")
+        features = self.extract_features(patches)
+        return self._pipeline.predict_proba(features)
