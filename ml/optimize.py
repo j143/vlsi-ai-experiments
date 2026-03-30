@@ -194,12 +194,14 @@ class BayesianOptimizer:
         self.early_stop = early_stop
         # Objective weights: vref is primary; iq/psrr/tc are secondary penalties.
         # Default: vref only (backward-compatible).
-        self.weights = weights or {"vref": 1.0}
-        for key, value in self.weights.items():
+        raw_weights = dict(weights or {"vref": 1.0})
+        validated_weights: dict[str, float] = {}
+        for key, value in raw_weights.items():
             weight_value = float(value)
             if weight_value < 0:
                 raise ValueError(f"Weight '{key}' must be >= 0, got {weight_value}")
-            self.weights[key] = weight_value
+            validated_weights[key] = weight_value
+        self.weights = validated_weights
 
         with open(specs_file) as f:
             self.specs = yaml.safe_load(f)
