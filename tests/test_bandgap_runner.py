@@ -52,6 +52,15 @@ class TestRenderNetlist:
             _render_netlist(template, {"NONEXISTENT_PARAM": 999})
         assert "not found" in caplog.text.lower() or "NONEXISTENT_PARAM" in caplog.text
 
+    def test_non_numeric_param_is_skipped(self, caplog):
+        import logging
+        template = Path(NETLIST_TEMPLATE)
+        original = template.read_text()
+        with caplog.at_level(logging.WARNING, logger="bandgap.runner"):
+            rendered = _render_netlist(template, {"N": "not-a-number"})
+        assert "non-numeric" in caplog.text.lower()
+        assert rendered == original
+
     def test_original_template_unchanged(self):
         """Rendering should not modify the template file on disk."""
         template = Path(NETLIST_TEMPLATE)
@@ -169,6 +178,20 @@ class TestCheckSpecs:
         assert checks["vref"] is True, "Vref should PASS for on-target design"
         assert checks["tc"] is True, "TC should PASS when below max (one-sided max constraint)"
         assert checks["iq"] is True, "Iq should PASS when below max"
+
+    def test_psrr_pass_when_above_minimum(self):
+        specs = self._make_specs()
+        specs["psrr"] = {"min_dc_dB": 60}
+        metrics = {"vref_V": 1.200, "tc_ppm_C": 10.0, "iq_uA": 20.0, "psrr_dB": -65.0}
+        checks = _check_specs(metrics, specs)
+        assert checks["psrr"] is True
+
+    def test_psrr_fails_safe_when_missing(self):
+        specs = self._make_specs()
+        specs["psrr"] = {"min_dc_dB": 60}
+        metrics = {"vref_V": 1.200, "tc_ppm_C": 10.0, "iq_uA": 20.0}
+        checks = _check_specs(metrics, specs)
+        assert checks["psrr"] is False
 
 
 class TestBandgapRunner:

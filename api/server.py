@@ -171,6 +171,44 @@ def _parse_bool(value: str | None, default: bool = False) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _get_int_arg(
+    source: dict,
+    key: str,
+    default: int,
+    *,
+    min_value: int | None = None,
+) -> int:
+    """Parse an integer argument from a dict-like source and validate range."""
+    raw = source.get(key, default)
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{key}' must be an integer") from None
+    if min_value is not None and value < min_value:
+        raise ValueError(f"'{key}' must be >= {min_value}")
+    return value
+
+
+def _get_float_arg(
+    source: dict,
+    key: str,
+    default: float,
+    *,
+    min_value: float | None = None,
+) -> float:
+    """Parse a float argument from a dict-like source and validate range."""
+    raw = source.get(key, default)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError(f"'{key}' must be a number") from None
+    if not math.isfinite(value):
+        raise ValueError(f"'{key}' must be finite")
+    if min_value is not None and value < min_value:
+        raise ValueError(f"'{key}' must be >= {min_value}")
+    return value
+
+
 def _resolve_preset(preset_id: str | None) -> dict | None:
     """Return the preset dict for *preset_id*, or *None* if not found."""
     if not preset_id:
@@ -312,17 +350,31 @@ def optimize():
     simulated point will contain an error string but the optimizer still runs.
     """
     body = request.get_json(silent=True) or {}
-    budget = int(body.get("budget", 50))
-    n_init = int(body.get("n_init", 10))
-    seed = int(body.get("seed", 42))
-    use_synthetic = bool(body.get("use_synthetic", False))
-    early_stop = bool(body.get("early_stop", False))
+    try:
+        budget = _get_int_arg(body, "budget", 50, min_value=1)
+        n_init = _get_int_arg(body, "n_init", 10, min_value=1)
+        seed = _get_int_arg(body, "seed", 42)
+        use_synthetic = bool(body.get("use_synthetic", False))
+        early_stop = bool(body.get("early_stop", False))
+    except ValueError as exc:
+        return Response(
+            json.dumps({"error": str(exc)}),
+            status=400,
+            mimetype="application/json",
+        )
     # Accept preset id; preset values are used as defaults (body overrides them)
     preset = _resolve_preset(body.get("preset"))
     weights = None
     if preset:
-        budget = int(body.get("budget", preset["budget"]))
-        n_init = int(body.get("n_init", preset["n_init"]))
+        try:
+            budget = _get_int_arg(body, "budget", int(preset["budget"]), min_value=1)
+            n_init = _get_int_arg(body, "n_init", int(preset["n_init"]), min_value=1)
+        except ValueError as exc:
+            return Response(
+                json.dumps({"error": str(exc)}),
+                status=400,
+                mimetype="application/json",
+            )
         early_stop = bool(body.get("early_stop", preset.get("early_stop", False)))
         weights = preset.get("weights")
 
@@ -398,17 +450,32 @@ def optimize_stream():
       - api_error: optimizer failure details
       - done: stream completion marker
     """
-    budget = int(request.args.get("budget", 50))
-    n_init = int(request.args.get("n_init", 10))
-    seed = int(request.args.get("seed", 42))
-    use_synthetic = _parse_bool(request.args.get("use_synthetic"), default=False)
-    early_stop = _parse_bool(request.args.get("early_stop"), default=False)
+    try:
+        args_dict = dict(request.args)
+        budget = _get_int_arg(args_dict, "budget", 50, min_value=1)
+        n_init = _get_int_arg(args_dict, "n_init", 10, min_value=1)
+        seed = _get_int_arg(args_dict, "seed", 42)
+        use_synthetic = _parse_bool(request.args.get("use_synthetic"), default=False)
+        early_stop = _parse_bool(request.args.get("early_stop"), default=False)
+    except ValueError as exc:
+        return Response(
+            json.dumps({"error": str(exc)}),
+            status=400,
+            mimetype="application/json",
+        )
     # Accept preset id; preset values are used as defaults (query params override)
     preset = _resolve_preset(request.args.get("preset"))
     weights = None
     if preset:
-        budget = int(request.args.get("budget", preset["budget"]))
-        n_init = int(request.args.get("n_init", preset["n_init"]))
+        try:
+            budget = _get_int_arg(args_dict, "budget", int(preset["budget"]), min_value=1)
+            n_init = _get_int_arg(args_dict, "n_init", int(preset["n_init"]), min_value=1)
+        except ValueError as exc:
+            return Response(
+                json.dumps({"error": str(exc)}),
+                status=400,
+                mimetype="application/json",
+            )
         early_stop = _parse_bool(
             request.args.get("early_stop"), default=preset.get("early_stop", False)
         )
@@ -541,10 +608,18 @@ def accuracy():
         }
     """
     source = request.args.get("source", "synthetic").lower()
-    n_test = max(5, min(int(request.args.get("n_test", 20)), 100))
-    n_train = max(20, min(int(request.args.get("n_train", 200)), 500))
-    seed = int(request.args.get("seed", 42))
-    tolerance_mV = float(request.args.get("tolerance_mV", 10.0))
+    try:
+        args_dict = dict(request.args)
+        n_test = max(5, min(_get_int_arg(args_dict, "n_test", 20, min_value=1), 100))
+        n_train = max(20, min(_get_int_arg(args_dict, "n_train", 200, min_value=1), 500))
+        seed = _get_int_arg(args_dict, "seed", 42)
+        tolerance_mV = _get_float_arg(args_dict, "tolerance_mV", 10.0, min_value=0.0)
+    except ValueError as exc:
+        return Response(
+            json.dumps({"error": str(exc)}),
+            status=400,
+            mimetype="application/json",
+        )
 
     try:
         from ml.surrogate import (  # noqa: PLC0415

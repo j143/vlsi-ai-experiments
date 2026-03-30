@@ -177,6 +177,14 @@ class BayesianOptimizer:
         early_stop: bool = False,
         weights: dict[str, float] | None = None,
     ) -> None:
+        if budget < 1:
+            raise ValueError(f"budget must be >= 1, got {budget}")
+        if n_init < 1:
+            raise ValueError(f"n_init must be >= 1, got {n_init}")
+        if n_candidates < 1:
+            raise ValueError(f"n_candidates must be >= 1, got {n_candidates}")
+        if xi < 0:
+            raise ValueError(f"xi must be >= 0, got {xi}")
         self.runner = runner
         self.budget = budget
         self.n_init = min(n_init, budget)
@@ -187,6 +195,11 @@ class BayesianOptimizer:
         # Objective weights: vref is primary; iq/psrr/tc are secondary penalties.
         # Default: vref only (backward-compatible).
         self.weights = weights or {"vref": 1.0}
+        for key, value in self.weights.items():
+            weight_value = float(value)
+            if weight_value < 0:
+                raise ValueError(f"Weight '{key}' must be >= 0, got {weight_value}")
+            self.weights[key] = weight_value
 
         with open(specs_file) as f:
             self.specs = yaml.safe_load(f)
@@ -275,6 +288,7 @@ class BayesianOptimizer:
                     cand_samples = _make_lhs_samples(n_samples=self.n_candidates, rng=rng)
                     C = np.array([_params_to_array(p) for p in cand_samples])
                     mu, sigma = model.predict_with_uncertainty(C)
+                    sigma = np.maximum(sigma, 0.0)
                     ei = _expected_improvement(mu, sigma, best_error, xi=self.xi)
                     best_idx = int(np.argmax(ei))
                     candidate_params = cand_samples[best_idx]

@@ -76,6 +76,9 @@ def _make_grid_samples(n_per_dim: int = 3) -> list[dict]:
     list of dict
         Each dict maps parameter name → value.
     """
+    if n_per_dim < 1:
+        raise ValueError(f"n_per_dim must be >= 1, got {n_per_dim}")
+
     grids = []
     for name, lo, hi, scale in PARAM_SPACE:
         if scale == "log":
@@ -113,6 +116,9 @@ def _make_lhs_samples(n_samples: int, rng: np.random.Generator | None = None) ->
     -------
     list of dict
     """
+    if n_samples < 1:
+        raise ValueError(f"n_samples must be >= 1, got {n_samples}")
+
     if rng is None:
         rng = np.random.default_rng(seed=42)
 
@@ -178,7 +184,11 @@ def run_sweep(
 
     for idx, params in enumerate(samples):
         t0 = time.perf_counter()
-        result = runner.run(params)
+        try:
+            result = runner.run(params)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Simulation failed for sample %d: %s", idx, exc)
+            result = {"vref_V": None, "iq_uA": None, "spec_checks": {}, "error": str(exc)}
         elapsed = time.perf_counter() - t0
 
         row = {**params}

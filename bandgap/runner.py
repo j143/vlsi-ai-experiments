@@ -19,6 +19,7 @@ Set environment variable NGSPICE_BIN to override the ngspice binary path.
 """
 
 import logging
+import math
 import os
 import re
 import shutil
@@ -68,10 +69,21 @@ def _render_netlist(template_path: Path, params: dict[str, Any]) -> str:
     """
     text = template_path.read_text()
     for name, value in params.items():
+        if not isinstance(name, str):
+            logger.warning("Skipping non-string parameter name: %r", name)
+            continue
+        try:
+            numeric_value = float(value)
+        except (TypeError, ValueError):
+            logger.warning("Skipping non-numeric parameter '%s': %r", name, value)
+            continue
+        if not math.isfinite(numeric_value):
+            logger.warning("Skipping non-finite parameter '%s': %r", name, value)
+            continue
         # Match lines like: .param N    = 8
         # Replace value after '=' with the new value.
         pattern = rf"(\.param\s+{re.escape(name)}\s*=\s*)[^\s$]+"
-        replacement = rf"\g<1>{value}"
+        replacement = rf"\g<1>{numeric_value:g}"
         new_text = re.sub(pattern, replacement, text, flags=re.IGNORECASE)
         if new_text == text:
             logger.warning("Parameter '%s' not found in netlist template.", name)
@@ -94,11 +106,13 @@ def _parse_op_output(ngspice_output: str) -> dict[str, float]:
     """
     results: dict[str, float] = {}
     # ngspice prints operating point as:  v(node) = <value>  or  i(source) = <value>
-    pattern = re.compile(r"(v\(\w+\)|i\(\w+\))\s*=\s*([-+eE\d.]+)", re.IGNORECASE)
+    pattern = re.compile(r"(v\([^)]+\)|i\([^)]+\))\s*=\s*([-+eE\d.]+)", re.IGNORECASE)
     for match in pattern.finditer(ngspice_output):
         var_name = match.group(1).lower()
         try:
-            results[var_name] = float(match.group(2))
+            value = float(match.group(2))
+            if math.isfinite(value):
+                results[var_name] = value
         except ValueError:
             pass
     return results
@@ -119,7 +133,11 @@ def _extract_vref(op_results: dict[str, float], specs: dict) -> float | None:
     float or None
         Vref in volts, or None if the measurement node was not found.
     """
-    node = specs["vref"]["measurement_node"].lower()
+    node = specs.get("vref", {}).get("measurement_node")
+    if not isinstance(node, str) or not node.strip():
+        logger.warning("Missing or invalid vref.measurement_node in specs; cannot extract Vref.")
+        return None
+    node = node.lower().strip()
     key = f"v({node})"
     return op_results.get(key)
 
@@ -145,8 +163,8 @@ def _check_specs(metrics: dict[str, Any], specs: dict) -> dict[str, bool]:
     # Vref check
     vref = metrics.get("vref_V")
     if vref is not None:
-        target = specs["vref"]["target_V"]
-        tol = specs["vref"]["tolerance_V"]
+        target = float(specs.get("vref", {}).get("target_V", 1.2))
+        tol = max(float(specs.get("vref", {}).get("tolerance_V", 0.0)), 0.0)
         checks["vref"] = abs(vref - target) <= tol
     else:
         checks["vref"] = False
@@ -154,16 +172,26 @@ def _check_specs(metrics: dict[str, Any], specs: dict) -> dict[str, bool]:
     # TC check
     tc = metrics.get("tc_ppm_C")
     if tc is not None:
-        checks["tc"] = abs(tc) <= specs["temperature_coefficient"]["max_ppm_C"]
+        tc_max = max(float(specs.get("temperature_coefficient", {}).get("max_ppm_C", 0.0)), 0.0)
+        checks["tc"] = abs(tc) <= tc_max
     else:
         checks["tc"] = False
 
     # Quiescent current check
     iq = metrics.get("iq_uA")
     if iq is not None:
-        checks["iq"] = iq <= specs["quiescent_current"]["max_uA"]
+        iq_max = max(float(specs.get("quiescent_current", {}).get("max_uA", 0.0)), 0.0)
+        checks["iq"] = iq <= iq_max
     else:
         checks["iq"] = False
+
+    # PSRR check (optional in result, but enforced if present in specs)
+    psrr = metrics.get("psrr_dB")
+    if psrr is not None:
+        min_psrr = max(float(specs.get("psrr", {}).get("min_dc_dB", 0.0)), 0.0)
+        checks["psrr"] = abs(psrr) >= min_psrr
+    else:
+        checks["psrr"] = False
 
     return checks
 
@@ -192,7 +220,7 @@ class BandgapRunner:
         self.specs_file = Path(specs_file)
         self.timeout_s = timeout_s
 
-        with open(self.specs_file) as f:
+        with open(self.specs_file, encoding="utf-8") as f:
             self.specs = yaml.safe_load(f)
 
         if not self.netlist_template.exists():
@@ -265,6 +293,8 @@ class BandgapRunner:
 
             except subprocess.TimeoutExpired:
                 result["error"] = f"ngspice timed out after {self.timeout_s}s"
+            except (OSError, ValueError) as exc:
+                result["error"] = f"ngspice invocation failed: {exc}"
 
         return result
 
