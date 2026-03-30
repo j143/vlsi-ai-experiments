@@ -191,6 +191,13 @@ print(f"Simulations used: {result.n_simulations}, Spec pass rate: {result.spec_p
 
 ---
 
+## Bandgap Design Rigor
+
+For the analog design process and sign-off discipline from a principal chip designer
+perspective, see [`bandgap/README.md`](bandgap/README.md).
+
+---
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for coding standards, data size limits,

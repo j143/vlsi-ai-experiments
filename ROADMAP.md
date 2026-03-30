@@ -155,7 +155,7 @@ Status legend:
 - [ ] `[infra]` Add `examples/` notebooks/scripts
 - [ ] `[infra]` Add architecture diagram to README
 - [ ] `[infra]` Add FAQ for ngspice + PDK setup
-- [ ] `[analog]` Add design notes for bandgap topology choices
+- [x] `[analog]` Add design notes for bandgap topology choices
 - [ ] `[ML]` Add model card template for released surrogate checkpoints
 
 ---
