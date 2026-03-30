@@ -10,6 +10,7 @@ Tests cover:
 ngspice is NOT required — all tests mock or skip ngspice calls.
 """
 
+import logging
 import sys
 from pathlib import Path
 from unittest.mock import patch
@@ -53,7 +54,6 @@ class TestRenderNetlist:
         assert "not found" in caplog.text.lower() or "NONEXISTENT_PARAM" in caplog.text
 
     def test_non_numeric_param_is_skipped(self, caplog):
-        import logging
         template = Path(NETLIST_TEMPLATE)
         original = template.read_text()
         with caplog.at_level(logging.WARNING, logger="bandgap.runner"):

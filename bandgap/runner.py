@@ -106,7 +106,9 @@ def _parse_op_output(ngspice_output: str) -> dict[str, float]:
     """
     results: dict[str, float] = {}
     # ngspice prints operating point as:  v(node) = <value>  or  i(source) = <value>
-    pattern = re.compile(r"(v\([^)]+\)|i\([^)]+\))\s*=\s*([-+eE\d.]+)", re.IGNORECASE)
+    # Matches numbers in standard or scientific notation (e.g., 1.23, -4.5e-6).
+    number_pat = r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?"
+    pattern = re.compile(rf"(v\([^)]+\)|i\([^)]+\))\s*=\s*({number_pat})", re.IGNORECASE)
     for match in pattern.finditer(ngspice_output):
         var_name = match.group(1).lower()
         try:
@@ -188,7 +190,9 @@ def _check_specs(metrics: dict[str, Any], specs: dict) -> dict[str, bool]:
     # PSRR check (optional in result, but enforced if present in specs)
     psrr = metrics.get("psrr_dB")
     if psrr is not None:
-        min_psrr = max(float(specs.get("psrr", {}).get("min_dc_dB", 0.0)), 0.0)
+        # Default to a 60 dB minimum rejection magnitude if PSRR spec is absent.
+        # We compare absolute magnitudes so both -60 dB and +60 dB conventions work.
+        min_psrr = abs(float(specs.get("psrr", {}).get("min_dc_dB", 60.0)))
         checks["psrr"] = abs(psrr) >= min_psrr
     else:
         checks["psrr"] = False

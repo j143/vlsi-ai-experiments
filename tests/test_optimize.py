@@ -9,6 +9,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ml.optimize import (  # noqa: E402
@@ -78,13 +80,11 @@ class TestSyntheticBandgapRunner:
 
 class TestBayesianOptimizerSynthetic:
     def test_invalid_budget_raises(self):
-        import pytest
         runner = SyntheticBandgapRunner(seed=42)
         with pytest.raises(ValueError):
             BayesianOptimizer(runner=runner, budget=0, n_init=1)
 
     def test_invalid_weight_raises(self):
-        import pytest
         runner = SyntheticBandgapRunner(seed=42)
         with pytest.raises(ValueError):
             BayesianOptimizer(runner=runner, budget=5, n_init=1, weights={"vref": -1.0})

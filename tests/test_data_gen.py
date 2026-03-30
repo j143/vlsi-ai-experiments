@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import numpy as np
+import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -21,7 +22,6 @@ from data_gen.sweep_bandgap import (  # noqa: E402
 
 class TestMakeGridSamples:
     def test_invalid_n_per_dim_raises(self):
-        import pytest
         with pytest.raises(ValueError):
             _make_grid_samples(n_per_dim=0)
 
@@ -61,7 +61,6 @@ class TestMakeGridSamples:
 
 class TestMakeLHSSamples:
     def test_invalid_n_samples_raises(self):
-        import pytest
         with pytest.raises(ValueError):
             _make_lhs_samples(n_samples=0)
 
@@ -109,6 +108,9 @@ class TestRunSweep:
         samples = _make_lhs_samples(n_samples=2)
         df = run_sweep(samples, out_dir=tmp_path, runner=mock_runner)
         assert (df["error"] == "boom").all()
+        for name, *_ in PARAM_SPACE:
+            assert name in df.columns
+            assert df[name].notna().all()
 
     def test_returns_dataframe_with_correct_columns(self, tmp_path):
         """run_sweep should return a DataFrame even when ngspice is unavailable."""
