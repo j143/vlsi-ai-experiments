@@ -77,6 +77,18 @@ class TestSyntheticBandgapRunner:
 # ---------------------------------------------------------------------------
 
 class TestBayesianOptimizerSynthetic:
+    def test_invalid_budget_raises(self):
+        import pytest
+        runner = SyntheticBandgapRunner(seed=42)
+        with pytest.raises(ValueError):
+            BayesianOptimizer(runner=runner, budget=0, n_init=1)
+
+    def test_invalid_weight_raises(self):
+        import pytest
+        runner = SyntheticBandgapRunner(seed=42)
+        with pytest.raises(ValueError):
+            BayesianOptimizer(runner=runner, budget=5, n_init=1, weights={"vref": -1.0})
+
     def _run_small_opt(self, tmp_path):
         runner = SyntheticBandgapRunner(seed=42)
         opt = BayesianOptimizer(runner=runner, budget=5, n_init=3,

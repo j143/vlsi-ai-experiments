@@ -95,6 +95,10 @@ class TestSimulate:
 
 
 class TestOptimize:
+    def test_invalid_budget_returns_400(self, client):
+        resp = client.post("/api/optimize", json={"budget": "bad"})
+        assert resp.status_code == 400
+
     def test_returns_expected_keys(self, client, ngspice_available):
         payload = {"budget": 3, "n_init": 2, "seed": 0}
         if not ngspice_available:
@@ -280,6 +284,10 @@ class TestAccuracy:
         resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=42&tolerance_mV=20")
         data = resp.get_json()
         assert data["tolerance_mV"] == 20.0
+
+    def test_invalid_tolerance_returns_400(self, client):
+        resp = client.get("/api/accuracy?tolerance_mV=nan")
+        assert resp.status_code == 400
 
     def test_mean_error_non_negative(self, client):
         resp = client.get("/api/accuracy?n_test=5&n_train=20&seed=42")

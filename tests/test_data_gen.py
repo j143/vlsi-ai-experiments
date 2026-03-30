@@ -20,6 +20,11 @@ from data_gen.sweep_bandgap import (  # noqa: E402
 
 
 class TestMakeGridSamples:
+    def test_invalid_n_per_dim_raises(self):
+        import pytest
+        with pytest.raises(ValueError):
+            _make_grid_samples(n_per_dim=0)
+
     def test_returns_list_of_dicts(self):
         samples = _make_grid_samples(n_per_dim=2)
         assert isinstance(samples, list)
@@ -55,6 +60,11 @@ class TestMakeGridSamples:
 
 
 class TestMakeLHSSamples:
+    def test_invalid_n_samples_raises(self):
+        import pytest
+        with pytest.raises(ValueError):
+            _make_lhs_samples(n_samples=0)
+
     def test_returns_correct_count(self):
         samples = _make_lhs_samples(n_samples=20)
         assert len(samples) == 20
@@ -92,6 +102,14 @@ class TestMakeLHSSamples:
 
 
 class TestRunSweep:
+    def test_runner_exception_is_captured(self, tmp_path):
+        mock_runner = MagicMock()
+        mock_runner.run.side_effect = RuntimeError("boom")
+        mock_runner.is_ngspice_available.return_value = True
+        samples = _make_lhs_samples(n_samples=2)
+        df = run_sweep(samples, out_dir=tmp_path, runner=mock_runner)
+        assert (df["error"] == "boom").all()
+
     def test_returns_dataframe_with_correct_columns(self, tmp_path):
         """run_sweep should return a DataFrame even when ngspice is unavailable."""
         mock_runner = MagicMock()
