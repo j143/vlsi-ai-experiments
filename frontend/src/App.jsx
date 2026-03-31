@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Activity,
+  BookOpen,
   Cpu,
   Layers,
   Settings,
@@ -985,11 +986,294 @@ const FALLBACK_API_BASE = 'http://127.0.0.1:5000/api';
 
 // --- Main App ---
 
+// --- Learn Tab ---
+
+const LEARN_PARAMS = [
+  {
+    id: 'N',
+    label: 'N — BJT Area Ratio',
+    range: '4–12',
+    effect: '↑ N → lower temperature coefficient; primary TC trim knob',
+    meaning: 'Ratio of emitter areas between the two BJTs. Sets the magnitude of the PTAT current.',
+  },
+  {
+    id: 'R2/R1',
+    label: 'R2/R1 — Resistor Ratio',
+    range: '~10 (set by I-Bias)',
+    effect: 'Controls PTAT gain. Must ≈ 10 for Vref ≈ 1.20 V at N = 8.',
+    meaning: 'R1 is the PTAT resistor between the two emitters; R2 carries 2×I_PTAT to GND.',
+  },
+  {
+    id: 'I_bias',
+    label: 'I-Bias (µA) — Quiescent Current',
+    range: '1–50 µA',
+    effect: '↑ I-Bias → lower Vref error, higher matching — but costs quiescent power.',
+    meaning: 'Sets the operating point of the Brokaw cell. R1 = VDD / I-Bias; R2 = R1/10.',
+  },
+  {
+    id: 'W_P',
+    label: 'W (M1/M2) (µm) — PMOS Width',
+    range: '1–20 µm',
+    effect: '↑ W → better current-mirror matching, improved PSRR; area penalty.',
+    meaning: 'Width of the PMOS current-mirror transistors (M1/M2). L is fixed at 1 µm.',
+  },
+];
+
+const LEARN_EXPERIMENTS = [
+  {
+    id: 1,
+    title: 'N Sweep: Find the TC Sweet Spot',
+    objective: 'See how increasing the BJT area ratio N changes the temperature coefficient (TC).',
+    observe: 'Watch TC drop as N rises from 4 → 8 → 12. Notice Vref sensitivity decreases too.',
+    designValues: { w_m1: 5, r_ratio: 8, i_bias: 10 },
+    hint: 'N = 8 is the nominal value. Try N = 4 or N = 12 after loading to compare.',
+  },
+  {
+    id: 2,
+    title: 'Power Budget: Low-Iq Design',
+    objective: 'Find the minimum I-Bias that keeps Vref within the ±10 mV spec.',
+    observe: 'At I-Bias = 2 µA the Vref error grows. Iq drops but TC and matching degrade.',
+    designValues: { w_m1: 5, r_ratio: 8, i_bias: 2 },
+    hint: 'Sweep I-Bias up from 2 µA until the Vref spec bar turns green.',
+  },
+  {
+    id: 3,
+    title: 'PMOS Sizing: Maximize PSRR',
+    objective: 'See how a wider PMOS (W = 15 µm) improves power-supply rejection ratio.',
+    observe: 'PSRR improves with larger W. Quiescent current stays approximately the same.',
+    designValues: { w_m1: 15, r_ratio: 8, i_bias: 10 },
+    hint: 'Compare PSRR at W = 2 µm vs W = 15 µm after observing the live estimate.',
+  },
+];
+
+function LearnTab({ setDesignValues, setActiveTab }) {
+  const [loadedExp, setLoadedExp] = useState(null);
+
+  const handleTry = (exp) => {
+    setDesignValues(exp.designValues);
+    setLoadedExp(exp.id);
+    setActiveTab('optimization');
+  };
+
+  const formulaStyle = {
+    fontFamily: 'monospace',
+    fontSize: '1.1rem',
+    color: '#38bdf8',
+    letterSpacing: '0.04em',
+  };
+
+  const annotationStyle = {
+    fontSize: '0.78rem',
+    color: '#94a3b8',
+    lineHeight: 1.6,
+  };
+
+  const thStyle = {
+    fontSize: '0.7rem',
+    color: '#64748b',
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: '0.06em',
+    padding: '0.4rem 0.75rem',
+    textAlign: 'left',
+    borderBottom: '1px solid #0f172a',
+  };
+
+  const tdStyle = {
+    fontSize: '0.78rem',
+    color: '#cbd5e1',
+    padding: '0.5rem 0.75rem',
+    borderBottom: '1px solid #0f172a',
+    verticalAlign: 'top',
+  };
+
+  const tdLabelStyle = { ...tdStyle, color: '#38bdf8', fontWeight: '600', whiteSpace: 'nowrap' };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', maxWidth: '820px' }}>
+
+      {/* ── Formula Card ── */}
+      <div style={S.card()}>
+        <div style={S.cardTitle}>
+          <BookOpen size={13} />Brokaw Bandgap — Core Formula
+        </div>
+
+        <div style={{
+          textAlign: 'center',
+          padding: '1rem 0 0.75rem',
+          borderBottom: '1px solid #0f172a',
+          marginBottom: '0.875rem',
+        }}>
+          <span style={formulaStyle}>
+            V<sub style={{ fontSize: '0.75em' }}>ref</sub>
+            {' = '}
+            V<sub style={{ fontSize: '0.75em' }}>be</sub>
+            {' + 2 · (R'}
+            <sub style={{ fontSize: '0.75em' }}>2</sub>
+            {'/R'}
+            <sub style={{ fontSize: '0.75em' }}>1</sub>
+            {') · V'}
+            <sub style={{ fontSize: '0.75em' }}>T</sub>
+            {' · ln(N)'}
+          </span>
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0.75rem' }}>
+          {[
+            {
+              sym: 'Vbe',
+              val: '≈ 0.65 V',
+              desc: 'Base-emitter voltage of the BJT. Decreases with temperature (CTAT — complementary to absolute temperature).',
+            },
+            {
+              sym: 'VT',
+              val: '≈ 26 mV @ 27 °C',
+              desc: 'Thermal voltage = kT/q. Increases with temperature (PTAT — proportional to absolute temperature).',
+            },
+            {
+              sym: 'N',
+              val: 'integer, 4–12',
+              desc: 'BJT emitter-area ratio. The primary temperature-coefficient trim knob. Higher N → smaller TC.',
+            },
+            {
+              sym: 'R2/R1',
+              val: '≈ 10',
+              desc: 'Resistor ratio that sets PTAT gain. At R2/R1 = 10, N = 8 → Vref ≈ 1.20 V (CTAT + PTAT cancel).',
+            },
+          ].map((item) => (
+            <div key={item.sym} style={{
+              backgroundColor: '#0f172a',
+              borderRadius: '0.375rem',
+              padding: '0.625rem 0.75rem',
+              borderLeft: '2px solid #334155',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem', marginBottom: '0.25rem' }}>
+                <span style={{ fontFamily: 'monospace', fontSize: '0.85rem', color: '#38bdf8', fontWeight: '700' }}>
+                  {item.sym}
+                </span>
+                <span style={{ fontSize: '0.7rem', color: '#64748b' }}>{item.val}</span>
+              </div>
+              <p style={{ ...annotationStyle, margin: 0 }}>{item.desc}</p>
+            </div>
+          ))}
+        </div>
+
+        <p style={{ ...annotationStyle, marginTop: '0.875rem', marginBottom: 0, color: '#64748b' }}>
+          The formula works because Vbe (CTAT) and the 2·(R2/R1)·VT·ln(N) term (PTAT) have
+          equal but opposite temperature slopes at the cancellation point — giving a
+          near-zero TC reference near 1.20 V.
+        </p>
+      </div>
+
+      {/* ── Parameter Reference Card ── */}
+      <div style={S.card()}>
+        <div style={S.cardTitle}>
+          <BarChart3 size={13} />Parameter Reference
+        </div>
+
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                <th style={thStyle}>Parameter</th>
+                <th style={thStyle}>Range</th>
+                <th style={thStyle}>Physical Meaning</th>
+                <th style={thStyle}>Primary Effect</th>
+              </tr>
+            </thead>
+            <tbody>
+              {LEARN_PARAMS.map((p) => (
+                <tr key={p.id}>
+                  <td style={tdLabelStyle}>{p.label}</td>
+                  <td style={{ ...tdStyle, color: '#fbbf24' }}>{p.range}</td>
+                  <td style={tdStyle}>{p.meaning}</td>
+                  <td style={tdStyle}>{p.effect}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* ── Guided Experiments Card ── */}
+      <div style={S.card()}>
+        <div style={S.cardTitle}>
+          <Play size={13} />Guided Experiments
+          <span style={{ fontSize: '0.7rem', color: '#64748b', fontWeight: '400', marginLeft: '0.25rem' }}>
+            — click Load &amp; Try to pre-load params and jump to the Optimization tab
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+          {LEARN_EXPERIMENTS.map((exp) => (
+            <div key={exp.id} style={{
+              backgroundColor: '#0f172a',
+              borderRadius: '0.5rem',
+              padding: '0.875rem',
+              border: loadedExp === exp.id ? '1px solid #38bdf8' : '1px solid #1e293b',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '1rem' }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.375rem' }}>
+                    <span style={{
+                      width: '20px', height: '20px', borderRadius: '50%',
+                      backgroundColor: '#1e293b', border: '1px solid #334155',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      fontSize: '0.7rem', fontWeight: '700', color: '#38bdf8', flexShrink: 0,
+                    }}>
+                      {exp.id}
+                    </span>
+                    <span style={{ fontSize: '0.85rem', fontWeight: '600', color: '#f8fafc' }}>
+                      {exp.title}
+                    </span>
+                  </div>
+                  <p style={{ ...annotationStyle, margin: '0 0 0.25rem 1.75rem' }}>
+                    <strong style={{ color: '#cbd5e1' }}>Objective:</strong> {exp.objective}
+                  </p>
+                  <p style={{ ...annotationStyle, margin: '0 0 0.25rem 1.75rem', color: '#64748b' }}>
+                    <strong style={{ color: '#94a3b8' }}>Observe:</strong> {exp.observe}
+                  </p>
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', marginLeft: '1.75rem', marginTop: '0.375rem' }}>
+                    {Object.entries(exp.designValues).map(([k, v]) => {
+                      const varDef = DESIGN_VARS.find((d) => d.id === k);
+                      return (
+                        <span key={k} style={{
+                          backgroundColor: '#1e293b', border: '1px solid #334155',
+                          borderRadius: '0.25rem', padding: '0.1rem 0.45rem',
+                          fontSize: '0.65rem', color: '#94a3b8',
+                        }}>
+                          {varDef?.label ?? k} = <strong style={{ color: '#38bdf8' }}>{v}{varDef?.unit ?? ''}</strong>
+                        </span>
+                      );
+                    })}
+                  </div>
+                  <p style={{ ...annotationStyle, margin: '0.375rem 0 0 1.75rem', color: '#475569', fontStyle: 'italic' }}>
+                    💡 {exp.hint}
+                  </p>
+                </div>
+                <button
+                  style={S.btn('primary', { flexShrink: 0, alignSelf: 'flex-start' })}
+                  onClick={() => handleTry(exp)}
+                >
+                  <Play size={12} />
+                  Load &amp; Try
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+    </div>
+  );
+}
+
 const NAV_ITEMS = [
   { id: 'optimization', label: 'Optimization', icon: TrendingUp },
   { id: 'layout', label: 'Layout Viewer', icon: Layers },
   { id: 'verification', label: 'Verification', icon: CheckCircle2 },
   { id: 'logs', label: 'Logs', icon: Terminal },
+  { id: 'learn', label: 'Learn', icon: BookOpen },
 ];
 
 /** Convert raw optimizer history entries into candidate rows for the table. */
@@ -1545,6 +1829,9 @@ export default function App() {
           )}
           {activeTab === 'verification' && <VerificationTab cornerData={liveCornerData} />}
           {activeTab === 'logs' && <LogsTab logLines={liveLogs} logRef={logRef} />}
+          {activeTab === 'learn' && (
+            <LearnTab setDesignValues={setDesignValues} setActiveTab={setActiveTab} />
+          )}
         </div>
       </div>
 
