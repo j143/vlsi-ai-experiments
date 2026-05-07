@@ -14,17 +14,20 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from layout.data_stub import (  # noqa: E402
     N_LAYERS,
     PatchConfig,
+    generate_bad_patch,
     generate_dataset,
+    generate_labeled_dataset,
     generate_synthetic_patch,
     mask_patches,
 )
 from layout.evaluate import (  # noqa: E402
+    confusion_matrix_report,
     evaluate_patches,
     iou_per_layer,
     pixel_accuracy_per_layer,
     run_drc,
 )
-from layout.patch_model import UNetPatchModel  # noqa: E402
+from layout.patch_model import BadPatchClassifier, UNetPatchModel  # noqa: E402
 
 
 class TestGenerateSyntheticPatch:
@@ -208,3 +211,156 @@ class TestUNetPatchModel:
         x = np.random.rand(32, 32).astype(np.float32)
         with pytest.raises(ValueError, match="4D"):
             model.predict(x)
+
+
+class TestGenerateBadPatch:
+    def test_output_shape(self):
+        cfg = PatchConfig(patch_size=32)
+        rng = np.random.default_rng(0)
+        patch = generate_bad_patch(cfg, rng)
+        assert patch.shape == (N_LAYERS, 32, 32)
+
+    def test_output_dtype(self):
+        cfg = PatchConfig(patch_size=32)
+        rng = np.random.default_rng(0)
+        patch = generate_bad_patch(cfg, rng)
+        assert patch.dtype == np.uint8
+
+    def test_binary_values(self):
+        cfg = PatchConfig(patch_size=32)
+        rng = np.random.default_rng(0)
+        for defect in ["empty", "noise", "missing_contacts", "short_circuit", "min_width"]:
+            patch = generate_bad_patch(cfg, rng, defect_type=defect)
+            assert set(np.unique(patch)).issubset({0, 1}), f"defect={defect}"
+
+    def test_all_defect_types_produce_valid_shape(self):
+        cfg = PatchConfig(patch_size=32)
+        rng = np.random.default_rng(7)
+        for defect in ["empty", "noise", "missing_contacts", "short_circuit", "min_width"]:
+            patch = generate_bad_patch(cfg, rng, defect_type=defect)
+            assert patch.shape == (N_LAYERS, 32, 32), f"defect={defect}"
+
+    def test_random_defect_type(self):
+        cfg = PatchConfig(patch_size=32)
+        rng = np.random.default_rng(99)
+        patch = generate_bad_patch(cfg, rng)  # defect_type=None → random
+        assert patch.shape == (N_LAYERS, 32, 32)
+
+
+class TestGenerateLabeledDataset:
+    def test_shapes(self):
+        patches, labels = generate_labeled_dataset(n_ok=10, n_bad=10, seed=0)
+        assert patches.shape == (20, N_LAYERS, 32, 32)
+        assert labels.shape == (20,)
+
+    def test_label_counts(self):
+        patches, labels = generate_labeled_dataset(n_ok=30, n_bad=20, seed=0)
+        assert (labels == 0).sum() == 30
+        assert (labels == 1).sum() == 20
+
+    def test_label_dtype(self):
+        _, labels = generate_labeled_dataset(n_ok=5, n_bad=5, seed=0)
+        assert labels.dtype == np.int64
+
+    def test_patches_dtype(self):
+        patches, _ = generate_labeled_dataset(n_ok=5, n_bad=5, seed=0)
+        assert patches.dtype == np.uint8
+
+    def test_is_shuffled(self):
+        """Labels should NOT all be 0s followed by 1s after shuffling."""
+        _, labels = generate_labeled_dataset(n_ok=50, n_bad=50, seed=0)
+        # Sorted labels != labels means shuffle happened.
+        assert not np.array_equal(labels, np.sort(labels))
+
+
+class TestBadPatchClassifier:
+    def test_fit_predict_shapes(self):
+        patches, labels = generate_labeled_dataset(n_ok=40, n_bad=40, seed=1)
+        clf = BadPatchClassifier()
+        clf.fit(patches[:60], labels[:60])
+        preds = clf.predict(patches[60:])
+        assert preds.shape == (20,)
+
+    def test_predict_before_fit_raises(self):
+        clf = BadPatchClassifier()
+        patches = np.zeros((5, N_LAYERS, 32, 32), dtype=np.uint8)
+        with pytest.raises(RuntimeError):
+            clf.predict(patches)
+
+    def test_predict_proba_shape(self):
+        patches, labels = generate_labeled_dataset(n_ok=40, n_bad=40, seed=2)
+        clf = BadPatchClassifier()
+        clf.fit(patches[:60], labels[:60])
+        proba = clf.predict_proba(patches[60:])
+        assert proba.shape == (20, 2)
+
+    def test_predictions_are_binary(self):
+        patches, labels = generate_labeled_dataset(n_ok=40, n_bad=40, seed=3)
+        clf = BadPatchClassifier()
+        clf.fit(patches[:60], labels[:60])
+        preds = clf.predict(patches[60:])
+        assert set(np.unique(preds)).issubset({0, 1})
+
+    def test_extract_features_shape(self):
+        patches = np.random.randint(0, 2, (10, N_LAYERS, 32, 32), dtype=np.uint8)
+        features = BadPatchClassifier.extract_features(patches)
+        assert features.shape[0] == 10
+        assert features.dtype == np.float32
+
+    def test_lr_classifier(self):
+        patches, labels = generate_labeled_dataset(n_ok=40, n_bad=40, seed=4)
+        clf = BadPatchClassifier(classifier_type="lr")
+        clf.fit(patches[:60], labels[:60])
+        preds = clf.predict(patches[60:])
+        assert preds.shape == (20,)
+
+    def test_unknown_classifier_raises(self):
+        with pytest.raises(ValueError):
+            BadPatchClassifier(classifier_type="xgb")
+
+    def test_reasonable_accuracy(self):
+        """Classifier should do significantly better than random (>60%) on this dataset."""
+        patches, labels = generate_labeled_dataset(n_ok=100, n_bad=100, seed=42)
+        n_train = int(0.8 * len(patches))
+        clf = BadPatchClassifier()
+        clf.fit(patches[:n_train], labels[:n_train])
+        preds = clf.predict(patches[n_train:])
+        accuracy = (preds == labels[n_train:]).mean()
+        assert accuracy > 0.60, f"Accuracy too low: {accuracy:.3f}"
+
+
+class TestConfusionMatrixReport:
+    def test_returns_expected_keys(self):
+        y_true = np.array([0, 0, 1, 1, 0, 1])
+        y_pred = np.array([0, 1, 1, 1, 0, 0])
+        result = confusion_matrix_report(y_true, y_pred)
+        for key in ("confusion_matrix", "accuracy", "precision", "recall",
+                    "f1_score", "class_names", "report"):
+            assert key in result
+
+    def test_perfect_predictions(self):
+        y = np.array([0, 0, 1, 1])
+        result = confusion_matrix_report(y, y)
+        assert result["accuracy"] == pytest.approx(1.0)
+        assert result["f1_score"] == pytest.approx(1.0)
+
+    def test_confusion_matrix_shape(self):
+        y_true = np.array([0, 1, 0, 1])
+        y_pred = np.array([0, 0, 1, 1])
+        result = confusion_matrix_report(y_true, y_pred)
+        cm = result["confusion_matrix"]
+        assert len(cm) == 2 and len(cm[0]) == 2
+
+    def test_custom_class_names(self):
+        y_true = np.array([0, 1])
+        y_pred = np.array([0, 1])
+        result = confusion_matrix_report(y_true, y_pred, class_names=["good", "defect"])
+        assert result["class_names"] == ["good", "defect"]
+
+    def test_scores_in_0_1(self):
+        rng = np.random.default_rng(0)
+        y_true = rng.integers(0, 2, 50)
+        y_pred = rng.integers(0, 2, 50)
+        result = confusion_matrix_report(y_true, y_pred)
+        for key in ("accuracy", "precision", "recall", "f1_score"):
+            assert 0.0 <= result[key] <= 1.0, key
